@@ -1,0 +1,68 @@
+# Companion script for amp-multiroom-card: reliably stream the AMP's
+# (analogue) source to a HEOS room speaker. Works around the HEOS quirk
+# where a follower joins the group but never starts playback.
+#
+# Create via Settings -> Automations & Scenes -> Scripts (or paste into
+# scripts.yaml under a `stream_amp_to_room:` key), then set it as the
+# card's join_script. Replace media_player.denon_amp_2 with your leader.
+alias: Audio - Stream AMP to Room
+description: >-
+  Join a HEOS room to the AMP's group and make sure it actually starts
+  playing: join -> verify -> press play -> unjoin/rejoin -> play.
+fields:
+  room:
+    name: Room speaker
+    required: true
+    selector:
+      entity:
+        filter:
+          - integration: heos
+            domain: media_player
+  amp_source:
+    name: AMP source
+    description: Optional input to switch the AVR to first.
+    required: false
+    selector:
+      select:
+        options: [Turntable, CD, Blu-ray, TV]
+sequence:
+  - if:
+      - condition: template
+        value_template: >-
+          {{ amp_source is defined and amp_source and
+             state_attr('media_player.denon_amp_2', 'source') != amp_source }}
+    then:
+      - action: media_player.select_source
+        target: {entity_id: media_player.denon_amp_2}
+        data: {source: "{{ amp_source }}"}
+      - delay: {seconds: 2}
+  - action: media_player.join
+    target: {entity_id: media_player.denon_amp_2}
+    data: {group_members: ["{{ room }}"]}
+  - wait_template: "{{ is_state(room, 'playing') }}"
+    timeout: {seconds: 6}
+    continue_on_timeout: true
+  - if:
+      - condition: template
+        value_template: "{{ not is_state(room, 'playing') }}"
+    then:
+      - action: media_player.media_play
+        target: {entity_id: "{{ room }}"}
+      - wait_template: "{{ is_state(room, 'playing') }}"
+        timeout: {seconds: 6}
+        continue_on_timeout: true
+  - if:
+      - condition: template
+        value_template: "{{ not is_state(room, 'playing') }}"
+    then:
+      - action: media_player.unjoin
+        target: {entity_id: "{{ room }}"}
+      - delay: {seconds: 2}
+      - action: media_player.join
+        target: {entity_id: media_player.denon_amp_2}
+        data: {group_members: ["{{ room }}"]}
+      - delay: {seconds: 2}
+      - action: media_player.media_play
+        target: {entity_id: "{{ room }}"}
+mode: parallel
+max: 4
