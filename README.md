@@ -1,16 +1,12 @@
 # HEOS Multiroom Card
 
-One-card multi-room audio control for Home Assistant, built for a HEOS group leader (e.g. a Denon AVR playing a turntable or CD) streaming to HEOS room speakers. Pick the AMP's source, add or remove rooms with a toggle, and control every volume — all rooms at once or each individually — without leaving the card.
+One-card multi-room audio control for Home Assistant, built for a HEOS group leader (e.g. a Denon AVR playing a turntable or CD) streaming to HEOS room speakers. Pick the AMP's source, add or remove rooms with a toggle, and control every volume — without leaving the card.
 
 Born of a real frustration: the HEOS app regularly forms a group from an analogue source but the follower never starts streaming, needing a remove/re-add and a manual play. This card pairs with a small Home Assistant script that automates that dance, so adding a room *just works*.
 
-![HEOS Multiroom Card](images/heos-multiroom-card.png)
-
-*Mid-vinyl-session: the AVR leads on Turntable and is muted locally (red) while the Denon 250 plays the stream in the dining room — receiver power and sound mode one tap away.*
-
 <img src="images/dashboard-context.png" width="380" alt="The card in a dashboard section">
 
-
+*Mid-vinyl-session: the AVR leads on Turntable and is muted locally (red) while the Denon 250 plays the stream in the dining room — receiver power and sound mode one tap away.*
 
 ## Features
 
