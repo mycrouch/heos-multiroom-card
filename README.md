@@ -1,4 +1,4 @@
-# AMP Multi-room Card
+# HEOS Multiroom Card
 
 One-card multi-room audio control for Home Assistant, built for a HEOS group leader (e.g. a Denon AVR playing a turntable or CD) streaming to HEOS room speakers. Pick the AMP's source, add or remove rooms with a toggle, and control every volume — all rooms at once or each individually — without leaving the card.
 
@@ -18,20 +18,20 @@ Born of a real frustration: the HEOS app regularly forms a group from an analogu
 ### HACS (recommended)
 
 1. HACS → three-dot menu → Custom repositories
-2. Add `https://github.com/mycrouch/amp-multiroom-card` as type **Dashboard**
-3. Search for "AMP Multi-room Card" and download
+2. Add `https://github.com/mycrouch/heos-multiroom-card` as type **Dashboard**
+3. Search for "HEOS Multiroom Card" and download
 4. Hard-refresh your browser
 
 ### Manual
 
-Download `amp-multiroom-card.js` to `/config/www/` and add it as a dashboard resource (`/local/amp-multiroom-card.js`, type module).
+Download `heos-multiroom-card.js` to `/config/www/` and add it as a dashboard resource (`/local/heos-multiroom-card.js`, type module).
 
 ## Configuration
 
 Everything is configurable in the GUI editor. YAML equivalent:
 
 ```yaml
-type: custom:amp-multiroom-card
+type: custom:heos-multiroom-card
 entity: media_player.denon_amp_2          # group leader (AMP)
 name: AMP Multi-room                      # card title
 amp_name: AMP (Lounge)                    # leader display name

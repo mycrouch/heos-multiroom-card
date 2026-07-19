@@ -1,6 +1,6 @@
 /*
- * AMP Multi-room Card v1.0.0
- * https://github.com/mycrouch/amp-multiroom-card
+ * HEOS Multiroom Card v1.1.0
+ * https://github.com/mycrouch/heos-multiroom-card
  *
  * One-card multi-room audio control for a HEOS group leader (e.g. a Denon AVR):
  * source picker, leader volume, all-rooms volume, and per-room join/volume/
@@ -10,11 +10,11 @@
  * MIT License — Jason Crouch. Icons: Material Design Icons via ha-icon.
  */
 
-const AMP_CARD_VERSION = '1.0.0';
+const HEOS_CARD_VERSION = '1.1.0';
 
-class AmpMultiroomCard extends HTMLElement {
+class HeosMultiroomCard extends HTMLElement {
   static getConfigElement() {
-    return document.createElement('amp-multiroom-card-editor');
+    return document.createElement('heos-multiroom-card-editor');
   }
 
   static getStubConfig(hass) {
@@ -195,7 +195,7 @@ class AmpMultiroomCard extends HTMLElement {
   _gradient() {
     const g = this._config.gradient;
     if (!g) return null;
-    const pair = Array.isArray(g) ? g : AmpMultiroomCard.GRADIENTS[String(g).toLowerCase()];
+    const pair = Array.isArray(g) ? g : HeosMultiroomCard.GRADIENTS[String(g).toLowerCase()];
     if (!pair || pair.length !== 2) return null;
     return `linear-gradient(145deg, ${pair[0]} 0%, ${pair[1]} 130%)`;
   }
@@ -504,7 +504,7 @@ class AmpMultiroomCard extends HTMLElement {
 // Theme picker with gradient swatches (shared pattern with the mycrouch
 // card family — shows a sample chip per installed theme).
 // ---------------------------------------------------------------------
-class AmpThemePicker extends HTMLElement {
+class HeosThemePicker extends HTMLElement {
   constructor() {
     super();
     this._open = false;
@@ -633,7 +633,7 @@ class AmpThemePicker extends HTMLElement {
 // ---------------------------------------------------------------------
 // GUI editor
 // ---------------------------------------------------------------------
-class AmpMultiroomCardEditor extends HTMLElement {
+class HeosMultiroomCardEditor extends HTMLElement {
   constructor() {
     super();
     this._config = null;
@@ -673,7 +673,7 @@ class AmpMultiroomCardEditor extends HTMLElement {
 
   _buildConfig(v) {
     const config = {
-      type: (this._config && this._config.type) || 'custom:amp-multiroom-card',
+      type: (this._config && this._config.type) || 'custom:heos-multiroom-card',
       entity: v.entity,
     };
     if (v.name) config.name = v.name;
@@ -719,7 +719,7 @@ class AmpMultiroomCardEditor extends HTMLElement {
   _syncPicker() {
     if (this._mode === 'theme') {
       if (!this._picker) {
-        this._picker = document.createElement('amp-theme-picker');
+        this._picker = document.createElement('heos-theme-picker');
         this._picker.addEventListener('value-changed', (ev) => {
           ev.stopPropagation();
           const config = { ...this._config, theme: ev.detail.value };
@@ -809,22 +809,22 @@ class AmpMultiroomCardEditor extends HTMLElement {
   }
 }
 
-customElements.define('amp-multiroom-card', AmpMultiroomCard);
-customElements.define('amp-multiroom-card-editor', AmpMultiroomCardEditor);
-customElements.define('amp-theme-picker', AmpThemePicker);
+customElements.define('heos-multiroom-card', HeosMultiroomCard);
+customElements.define('heos-multiroom-card-editor', HeosMultiroomCardEditor);
+customElements.define('heos-theme-picker', HeosThemePicker);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: 'amp-multiroom-card',
-  name: 'AMP Multi-room Card',
+  type: 'heos-multiroom-card',
+  name: 'HEOS Multiroom Card',
   preview: true,
-  documentationURL: 'https://github.com/mycrouch/amp-multiroom-card',
+  documentationURL: 'https://github.com/mycrouch/heos-multiroom-card',
   description:
     'One-card multi-room audio for a HEOS group leader: source picker, leader and all-rooms volume, and per-room join/volume/play-stop rows, with reliable analogue-source streaming via an optional join script.',
 });
 
 console.info(
-  `%c AMP-MULTIROOM-CARD %c v${AMP_CARD_VERSION} `,
+  `%c HEOS-MULTIROOM-CARD %c v${HEOS_CARD_VERSION} `,
   'color: white; background: #03a9f4; font-weight: 700;',
   'color: #03a9f4; background: white; font-weight: 700;'
 );
