@@ -61,6 +61,7 @@ avr_entities:                             # optional receiver companions
 | `sources` | all | Subset/order of the leader's `source_list` to show (ignored for leaders it doesn't match) |
 | `names` | friendly names | Per-player display name overrides |
 | `avr_entities` | none | Map of player → its receiver entity (e.g. from the denonavr integration). When that player leads, the card adds a receiver power button and a Sound mode dropdown |
+| `sound_modes` | all | Map of player → sound modes to show. Integrations offer generic model lists; use this to hide modes your receiver ignores |
 | `theme` | none | Apply an installed theme to this card only |
 | `gradient` | none | `[from, to]` manual gradient colours |
 

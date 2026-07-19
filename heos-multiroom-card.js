@@ -1,5 +1,5 @@
 /*
- * HEOS Multiroom Card v1.5.0
+ * HEOS Multiroom Card v1.5.1
  * https://github.com/mycrouch/heos-multiroom-card
  *
  * One-card multi-room audio for HEOS: pick a group leader from your pool of
@@ -13,7 +13,7 @@
  * MIT License — Jason Crouch. Icons: Material Design Icons via ha-icon.
  */
 
-const HEOS_CARD_VERSION = '1.5.0';
+const HEOS_CARD_VERSION = '1.5.1';
 const HEOS_JOIN_SCRIPT_ID = 'heos_join_room';
 
 // Server-side companion script created by the editor's one-click setup.
@@ -135,6 +135,9 @@ class HeosMultiroomCard extends HTMLElement {
     // denonavr integration). Adds power + sound-mode controls when that
     // player is the leader.
     this._avrMap = config.avr_entities || {};
+    // Optional per-player sound-mode filter (integrations offer generic
+    // model lists; hide the modes this receiver ignores).
+    this._modeFilter = config.sound_modes || {};
     this._userLeader = null; // manual pick on the card, session-scoped
     this._builtLeader = null;
     this._built = false;
@@ -741,7 +744,12 @@ class HeosMultiroomCard extends HTMLElement {
     const as = this._hass.states[avr];
     const aa = (as && as.attributes) || {};
     const current = aa.sound_mode;
-    const modes = aa.sound_mode_list || [];
+    let modes = aa.sound_mode_list || [];
+    const mf = this._modeFilter[leader];
+    if (Array.isArray(mf) && mf.length) {
+      const filtered = modes.filter((m) => mf.includes(m));
+      if (filtered.length) modes = filtered;
+    }
     container.innerHTML = `<div class="dropdown-menu">
       ${modes
         .map(
@@ -983,14 +991,18 @@ class HeosMultiroomCardEditor extends HTMLElement {
     if (v.join_script) config.join_script = v.join_script;
     const srcMap = {};
     const avrMap = {};
+    const smfMap = {};
     (config.players || []).forEach((p, i) => {
       const list = v[`src_${i}`];
       if (Array.isArray(list) && list.length) srcMap[p] = list;
       const a = v[`avr_${i}`];
       if (a) avrMap[p] = a;
+      const sm = v[`smf_${i}`];
+      if (Array.isArray(sm) && sm.length) smfMap[p] = sm;
     });
     if (Object.keys(srcMap).length) config.sources = srcMap;
     if (Object.keys(avrMap).length) config.avr_entities = avrMap;
+    if (Object.keys(smfMap).length) config.sound_modes = smfMap;
     if (this._config && (this._config.names || this._config.room_names))
       config.names = this._config.names || this._config.room_names;
     if (v.mode === 'theme') {
@@ -1184,6 +1196,19 @@ class HeosMultiroomCardEditor extends HTMLElement {
         label: `Receiver entity for ${friendly(p)} (optional — adds power + sound modes)`,
         selector: { entity: { domain: 'media_player' } },
       });
+      const avrEnt = (this._config.avr_entities || {})[p];
+      const avrState = avrEnt && this._hass ? this._hass.states[avrEnt] : null;
+      const modeOpts =
+        (avrState && avrState.attributes && avrState.attributes.sound_mode_list) || [];
+      if (modeOpts.length) {
+        schema.push({
+          name: `smf_${i}`,
+          label: `Sound modes shown for ${friendly(p)} (optional filter — hide modes the receiver ignores)`,
+          selector: {
+            select: { multiple: true, mode: 'dropdown', options: modeOpts },
+          },
+        });
+      }
     });
     schema.push({
       name: 'mode',
@@ -1224,6 +1249,8 @@ class HeosMultiroomCardEditor extends HTMLElement {
       data[`src_${i}`] = (current && current[`src_${i}`]) || pre;
       data[`avr_${i}`] =
         (current && current[`avr_${i}`]) || (this._config.avr_entities || {})[p] || '';
+      data[`smf_${i}`] =
+        (current && current[`smf_${i}`]) || (this._config.sound_modes || {})[p] || [];
     });
     this._form.data = data;
   }
