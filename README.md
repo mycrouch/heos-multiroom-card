@@ -6,8 +6,10 @@ Born of a real frustration: the HEOS app regularly forms a group from an analogu
 
 ## Features
 
-- **Source picker** — dropdown of the leader's sources, optionally filtered to the ones you actually use (hide that Cameras input).
-- **Per-room join toggles** — flip a room on and it joins the AMP's group (via your join script for reliable analogue streaming, or plain `media_player.join`); flip it off to unjoin. Rows expand with controls only when a room is active.
+- **Switchable group leader** — configure a pool of players; any of them can lead (an AVR's turntable, a speaker's AUX/USB input). Tap the leader name to hand leadership to another unit; the card also live-detects groups formed in the HEOS app (HA lists the leader first in `group_members`). Switching leader dissolves the current group first.
+- **Source picker** — dropdown of the current leader's sources, optionally filtered to the ones you actually use (hide that Cameras input).
+- **One-click join-script setup** — the editor offers a button that creates the server-side companion script for you (admin users). No YAML, no docs detour.
+- **Per-room join toggles** — flip a room on and it joins the leader's group (via the join script for reliable analogue streaming, or plain `media_player.join`); flip it off to unjoin. Rows expand with controls only when a room is active.
 - **All-rooms volume** — one slider that sets every current group member, alongside individual sliders for the AMP and each room.
 - **Play/stop per room** — nudge a stubborn follower without opening the HEOS app.
 - **GUI editor** — leader, rooms, source filter (populated live from the leader's `source_list`), join script, names, and styling all configurable without YAML.
@@ -32,36 +34,37 @@ Everything is configurable in the GUI editor. YAML equivalent:
 
 ```yaml
 type: custom:heos-multiroom-card
-entity: media_player.denon_amp_2          # group leader (AMP)
-name: AMP Multi-room                      # card title
-amp_name: AMP (Lounge)                    # leader display name
-rooms:
+players:                                  # the pool — any of these can lead
+  - media_player.denon_amp_2
   - media_player.dining_room
   - media_player.master_bedroom
-join_script: script.stream_amp_to_room    # optional but recommended
+default_leader: media_player.denon_amp_2  # who leads when no group is active
+name: AMP Multi-room                      # card title
+join_script: script.heos_join_room        # created by the editor button
 sources:                                  # optional filter of source_list
   - Turntable
   - CD
   - TV
-room_names:                               # optional display overrides (YAML only)
+names:                                    # optional display overrides (YAML only)
   media_player.dining_room: Dining
 ```
 
 | Option | Default | Description |
 |---|---|---|
-| `entity` | required | Group leader `media_player` (must support grouping) |
-| `rooms` | `[]` | Room speakers offered as join toggles |
+| `players` | required | Pool of grouping-capable `media_player`s — leader candidates and rooms |
+| `default_leader` | first player | Who leads when no group is active (the card live-detects the actual leader of any active group) |
 | `name` | `Multi-room Audio` | Card title |
-| `amp_name` | leader's friendly name | Leader row label |
-| `join_script` | none | Script called with `room:` to join reliably; falls back to `media_player.join` |
-| `sources` | all | Subset/order of the leader's `source_list` to show |
-| `room_names` | friendly names | Per-room display name overrides |
+| `join_script` | none | Script called with `leader:` + `room:` to join reliably; falls back to `media_player.join` |
+| `sources` | all | Subset/order of the leader's `source_list` to show (ignored for leaders it doesn't match) |
+| `names` | friendly names | Per-player display name overrides |
 | `theme` | none | Apply an installed theme to this card only |
 | `gradient` | none | `[from, to]` manual gradient colours |
 
+Legacy v1.0/1.1 options `entity`, `rooms`, `amp_name` and `room_names` keep working as silent aliases.
+
 ### The join script
 
-For network sources plain `media_player.join` is fine. For analogue sources (turntable/CD) HEOS followers often join silently; the companion script joins, verifies playback, presses play, and re-joins if needed. Example in [`examples/stream_amp_to_room.yaml`](examples/stream_amp_to_room.yaml).
+For network sources plain `media_player.join` is fine. For analogue sources (turntable/CD) HEOS followers often join silently; the companion script joins, verifies playback, presses play, and re-joins if needed. **Click "Create join script" in the card editor to set it up in one click** — or create it manually from [`examples/stream_amp_to_room.yaml`](examples/stream_amp_to_room.yaml).
 
 ## Notes
 

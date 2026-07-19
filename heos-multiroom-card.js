@@ -1,16 +1,91 @@
 /*
- * HEOS Multiroom Card v1.1.0
+ * HEOS Multiroom Card v1.2.0
  * https://github.com/mycrouch/heos-multiroom-card
  *
- * One-card multi-room audio control for a HEOS group leader (e.g. a Denon AVR):
- * source picker, leader volume, all-rooms volume, and per-room join/volume/
- * play-stop rows. Rooms join via a configurable Home Assistant script (for
- * reliable analogue-source streaming) or plain media_player.join.
+ * One-card multi-room audio for HEOS: pick a group leader from your pool of
+ * players (any HEOS unit with a physical input can lead — AVR turntable,
+ * a speaker's AUX/USB), toggle rooms in and out of the group, and control
+ * every volume — all rooms at once or each individually. Pairs with a small
+ * server-side join script (one-click creation from the card editor) that
+ * works around HEOS's silent-follower bug on analogue sources.
  *
  * MIT License — Jason Crouch. Icons: Material Design Icons via ha-icon.
  */
 
-const HEOS_CARD_VERSION = '1.1.0';
+const HEOS_CARD_VERSION = '1.2.0';
+const HEOS_JOIN_SCRIPT_ID = 'heos_join_room';
+
+// Server-side companion script created by the editor's one-click setup.
+// Generic: takes leader + room, so one script serves every card instance.
+const HEOS_JOIN_SCRIPT_CONFIG = {
+  alias: 'HEOS - Join Room to Leader',
+  description:
+    'Created by HEOS Multiroom Card. Joins a HEOS room speaker to a group ' +
+    "leader and makes sure it actually starts playing (works around HEOS's " +
+    'silent-follower bug on analogue sources): join, verify, press play, ' +
+    'and if still silent unjoin/rejoin and play again.',
+  fields: {
+    leader: {
+      name: 'Group leader',
+      required: true,
+      selector: { entity: { domain: 'media_player' } },
+    },
+    room: {
+      name: 'Room speaker',
+      required: true,
+      selector: { entity: { domain: 'media_player' } },
+    },
+  },
+  sequence: [
+    {
+      action: 'media_player.join',
+      target: { entity_id: '{{ leader }}' },
+      data: { group_members: ['{{ room }}'] },
+    },
+    {
+      wait_template: "{{ is_state(room, 'playing') }}",
+      timeout: { seconds: 6 },
+      continue_on_timeout: true,
+    },
+    {
+      if: [
+        {
+          condition: 'template',
+          value_template: "{{ not is_state(room, 'playing') }}",
+        },
+      ],
+      then: [
+        { action: 'media_player.media_play', target: { entity_id: '{{ room }}' } },
+        {
+          wait_template: "{{ is_state(room, 'playing') }}",
+          timeout: { seconds: 6 },
+          continue_on_timeout: true,
+        },
+      ],
+    },
+    {
+      if: [
+        {
+          condition: 'template',
+          value_template: "{{ not is_state(room, 'playing') }}",
+        },
+      ],
+      then: [
+        { action: 'media_player.unjoin', target: { entity_id: '{{ room }}' } },
+        { delay: { seconds: 2 } },
+        {
+          action: 'media_player.join',
+          target: { entity_id: '{{ leader }}' },
+          data: { group_members: ['{{ room }}'] },
+        },
+        { delay: { seconds: 2 } },
+        { action: 'media_player.media_play', target: { entity_id: '{{ room }}' } },
+      ],
+    },
+  ],
+  mode: 'parallel',
+  max: 10,
+};
 
 class HeosMultiroomCard extends HTMLElement {
   static getConfigElement() {
@@ -18,48 +93,74 @@ class HeosMultiroomCard extends HTMLElement {
   }
 
   static getStubConfig(hass) {
-    // Prefer a media_player that supports grouping (bit 524288) and has other
-    // grouping-capable siblings to offer as rooms.
-    const players = Object.keys(hass.states).filter((e) => e.startsWith('media_player.'));
-    const grouping = players.filter(
-      (e) => ((hass.states[e].attributes.supported_features || 0) & 524288) !== 0
-    );
-    const leader = grouping[0] || players[0] || '';
-    const rooms = grouping.filter((e) => e !== leader).slice(0, 3);
-    return { entity: leader, rooms };
+    // Grouping-capable media players (GROUPING feature bit 524288). Default
+    // leader = the unit with the most sources (an AVR beats a speaker).
+    const players = Object.keys(hass.states)
+      .filter((e) => e.startsWith('media_player.'))
+      .filter((e) => ((hass.states[e].attributes.supported_features || 0) & 524288) !== 0)
+      .slice(0, 5);
+    let leader = players[0] || '';
+    let best = -1;
+    players.forEach((e) => {
+      const n = ((hass.states[e].attributes || {}).source_list || []).length;
+      if (n > best) {
+        best = n;
+        leader = e;
+      }
+    });
+    return { players, default_leader: leader };
   }
 
   setConfig(config) {
-    if (!config.entity) {
-      throw new Error('You need to define an entity (the group leader media_player)');
+    // v1.2 config: players + default_leader. Back-compat with v1.0/1.1
+    // entity + rooms (absent new option = previous behaviour).
+    let players = Array.isArray(config.players) ? [...config.players] : null;
+    let defaultLeader = config.default_leader || null;
+    if (!players) {
+      const rooms = Array.isArray(config.rooms) ? config.rooms : [];
+      if (!config.entity) {
+        throw new Error('Define players (list of media_players) or a legacy entity');
+      }
+      players = [config.entity, ...rooms];
+      defaultLeader = defaultLeader || config.entity;
     }
+    if (!players.length) throw new Error('players must contain at least one media_player');
+    if (!defaultLeader || !players.includes(defaultLeader)) defaultLeader = players[0];
     this._config = config;
-    this._rooms = Array.isArray(config.rooms) ? config.rooms : [];
+    this._players = players;
+    this._defaultLeader = defaultLeader;
+    this._names = config.names || config.room_names || {};
+    this._userLeader = null; // manual pick on the card, session-scoped
+    this._builtLeader = null;
     this._built = false;
     this._errorShown = false;
     this._showSources = false;
-    this._dragging = {}; // slider entity -> true while user is dragging
-    this._pendingJoin = {}; // room -> timestamp of optimistic UI hold
+    this._showLeaders = false;
+    this._dragging = {};
+    this._pendingJoin = {};
     this._renderKey = '';
   }
 
   set hass(hass) {
     this._hass = hass;
     if (!this._config) return;
-    const leader = hass.states[this._config.entity];
-    if (!leader) {
+    const missing = this._players.filter((p) => !hass.states[p]);
+    if (missing.length === this._players.length) {
       if (!this._errorShown) {
-        this.innerHTML = `<ha-card><div style="padding:16px;">Entity not found: ${this._config.entity}</div></ha-card>`;
+        this.innerHTML = `<ha-card><div style="padding:16px;">Entities not found: ${missing.join(', ')}</div></ha-card>`;
         this._errorShown = true;
         this._built = false;
       }
       return;
     }
     this._errorShown = false;
-    if (!this._built) {
-      this._buildDom();
+    const leader = this._currentLeader();
+    if (!this._built || this._builtLeader !== leader) {
+      this._buildDom(leader);
       this._built = true;
+      this._builtLeader = leader;
       this._appliedThemeName = undefined;
+      this._renderKey = '';
     }
     const wantTheme = this._config.theme || null;
     const dark = hass.themes && hass.themes.darkMode;
@@ -68,17 +169,16 @@ class HeosMultiroomCard extends HTMLElement {
       this._appliedThemeName = wantTheme;
       this._appliedThemeDark = dark;
     }
-    // Cheap re-render guard: skip patching when nothing we consume changed.
-    const key = this._buildRenderKey();
+    const key = this._buildRenderKey(leader);
     if (key !== this._renderKey) {
       this._renderKey = key;
-      this._updateDynamic();
+      this._updateDynamic(leader);
     }
   }
 
-  _buildRenderKey() {
-    const parts = [];
-    const push = (id) => {
+  _buildRenderKey(leader) {
+    const parts = [leader];
+    this._players.forEach((id) => {
       const s = this._hass.states[id];
       if (!s) {
         parts.push(`${id}:missing`);
@@ -88,44 +188,58 @@ class HeosMultiroomCard extends HTMLElement {
       parts.push(
         `${id}:${s.state}:${a.source || ''}:${a.volume_level ?? ''}:${(a.group_members || []).join(',')}`
       );
-    };
-    push(this._config.entity);
-    this._rooms.forEach(push);
+    });
     return parts.join('|');
   }
 
   getCardSize() {
-    return 3 + this._rooms.length;
+    return 2 + this._players.length;
   }
 
-  // --- helpers ---------------------------------------------------------
+  // --- leader / group helpers ------------------------------------------
 
-  _leader() {
-    return this._hass.states[this._config.entity];
+  // Live leader detection: HA's group_members convention puts the leader
+  // first. A configured player actively leading a multi-member group wins;
+  // otherwise the user's session pick; otherwise the configured default.
+  _currentLeader() {
+    for (const p of this._players) {
+      const s = this._hass.states[p];
+      const gm = (s && s.attributes && s.attributes.group_members) || [];
+      if (gm.length > 1 && gm[0] === p) return p;
+    }
+    if (this._userLeader && this._players.includes(this._userLeader)) return this._userLeader;
+    return this._defaultLeader;
   }
 
-  _groupMembers() {
-    const l = this._leader();
+  _rooms(leader) {
+    return this._players.filter((p) => p !== leader);
+  }
+
+  _groupMembers(leader) {
+    const l = this._hass.states[leader];
     return (l && l.attributes && l.attributes.group_members) || [];
   }
 
-  _isJoined(room) {
-    return this._groupMembers().includes(room);
+  _isJoined(leader, room) {
+    return this._groupMembers(leader).includes(room);
   }
 
-  _roomName(room) {
-    const names = this._config.room_names || {};
-    if (names[room]) return names[room];
-    const s = this._hass.states[room];
-    return (s && s.attributes && s.attributes.friendly_name) || room;
+  _displayName(id) {
+    if (this._names[id]) return this._names[id];
+    if (id === this._builtLeader && this._config.amp_name) return this._config.amp_name;
+    const s = this._hass.states[id];
+    return (s && s.attributes && s.attributes.friendly_name) || id;
   }
 
-  _sourceList() {
-    const l = this._leader();
+  _sourceList(leader) {
+    const l = this._hass.states[leader];
     const all = (l && l.attributes && l.attributes.source_list) || [];
     const filter = this._config.sources;
     if (Array.isArray(filter) && filter.length) {
-      return filter.filter((s) => all.includes(s));
+      const filtered = filter.filter((s) => all.includes(s));
+      // The filter is leader-specific; if it matches nothing on this
+      // leader (e.g. leader switched from AVR to a speaker), show all.
+      if (filtered.length) return filtered;
     }
     return all;
   }
@@ -134,15 +248,15 @@ class HeosMultiroomCard extends HTMLElement {
     this._hass.callService(domain, service, data);
   }
 
-  _joinRoom(room) {
+  _joinRoom(leader, room) {
     this._pendingJoin[room] = Date.now();
     const script = this._config.join_script;
     if (script) {
       const name = script.replace(/^script\./, '');
-      this._callService('script', name, { room });
+      this._callService('script', name, { leader, room });
     } else {
       this._callService('media_player', 'join', {
-        entity_id: this._config.entity,
+        entity_id: leader,
         group_members: [room],
       });
     }
@@ -153,6 +267,24 @@ class HeosMultiroomCard extends HTMLElement {
     this._callService('media_player', 'unjoin', { entity_id: room });
   }
 
+  _switchLeader(newLeader) {
+    const oldLeader = this._currentLeader();
+    if (newLeader === oldLeader) return;
+    // Dissolve any active group led by the old leader before switching —
+    // predictable, documented behaviour.
+    const gm = this._groupMembers(oldLeader);
+    if (gm.length > 1) {
+      gm.filter((e) => e !== oldLeader).forEach((e) =>
+        this._callService('media_player', 'unjoin', { entity_id: e })
+      );
+    }
+    this._userLeader = newLeader;
+    this._showLeaders = false;
+    this._built = false; // rebuild around the new leader
+    this._renderKey = '';
+    if (this._hass) this.hass = this._hass;
+  }
+
   _setVolume(entityId, pct) {
     this._callService('media_player', 'volume_set', {
       entity_id: entityId,
@@ -160,9 +292,9 @@ class HeosMultiroomCard extends HTMLElement {
     });
   }
 
-  _setGroupVolume(pct) {
-    const members = this._groupMembers();
-    const targets = members.length ? members : [this._config.entity];
+  _setGroupVolume(leader, pct) {
+    const members = this._groupMembers(leader);
+    const targets = members.length ? members : [leader];
     targets.forEach((e) => this._setVolume(e, pct));
   }
 
@@ -200,8 +332,6 @@ class HeosMultiroomCard extends HTMLElement {
     return `linear-gradient(145deg, ${pair[0]} 0%, ${pair[1]} 130%)`;
   }
 
-  // Apply a named installed theme to this card only (same approach as HA's
-  // applyThemesOnElement): set each theme var as a CSS custom property.
   _applyTheme() {
     if (this._appliedThemeVars) {
       for (const p of this._appliedThemeVars) this.style.removeProperty(p);
@@ -225,13 +355,15 @@ class HeosMultiroomCard extends HTMLElement {
     }
   }
 
-  // --- one-time DOM ----------------------------------------------------
+  // --- DOM (rebuilt when the leader changes) ---------------------------
 
-  _buildDom() {
+  _buildDom(leader) {
     const grad = this._gradient();
     const title = this._config.name || 'Multi-room Audio';
+    const rooms = this._rooms(leader);
+    const multiLeader = this._players.length > 1;
 
-    const roomRows = this._rooms
+    const roomRows = rooms
       .map(
         (room, i) => `
         <div class="room-row" data-room="${room}">
@@ -254,8 +386,8 @@ class HeosMultiroomCard extends HTMLElement {
     this.innerHTML = `
       <ha-card class="${grad ? 'grad' : ''}" style="${grad ? `background:${grad};border:none;` : ''}">
         <style>
-          ha-card.grad .title, ha-card.grad .room-name, ha-card.grad .amp-name { color: #fff; }
-          ha-card.grad .sub, ha-card.grad .vol-pct, ha-card.grad .vol-ic, ha-card.grad .hint { color: rgba(255,255,255,0.72); }
+          ha-card.grad .title, ha-card.grad .room-name, ha-card.grad .leader-name { color: #fff; }
+          ha-card.grad .sub, ha-card.grad .vol-pct, ha-card.grad .vol-ic, ha-card.grad .leader-caret { color: rgba(255,255,255,0.72); }
           ha-card.grad .src-btn { background: rgba(255,255,255,0.12); color: #fff; }
           ha-card.grad .src-btn:hover { background: rgba(255,255,255,0.2); }
           ha-card.grad .src-btn ha-icon { color: #fff; }
@@ -282,6 +414,7 @@ class HeosMultiroomCard extends HTMLElement {
           .dropdown-menu { position: absolute; top: 44px; right: 0; background: var(--card-background-color, #fff);
             box-shadow: 0 2px 8px rgba(0,0,0,0.25); border-radius: 8px; padding: 4px 0; z-index: 5; min-width: 170px;
             max-height: 260px; overflow: auto; }
+          .dropdown-menu.left { right: auto; left: 0; top: 26px; }
           .dropdown-item { padding: 10px 16px; cursor: pointer; font-size: 14px; color: var(--primary-text-color); white-space: nowrap; }
           .dropdown-item:hover { background: var(--secondary-background-color, #f2f2f2); }
           .dropdown-item.selected { color: var(--primary-color); font-weight: 600; }
@@ -289,9 +422,13 @@ class HeosMultiroomCard extends HTMLElement {
           .vol-ic { --mdc-icon-size: 18px; color: var(--secondary-text-color); flex: none; }
           input[type=range].vol { flex: 1; accent-color: var(--primary-color, #03a9f4); height: 22px; margin: 0; min-width: 0; }
           .vol-pct { font-size: 12px; color: var(--secondary-text-color); width: 34px; text-align: right; flex: none; }
-          .amp-block { margin-top: 14px; }
-          .amp-name { font-size: 14px; font-weight: 500; color: var(--primary-text-color); }
+          .leader-block { margin-top: 14px; position: relative; }
+          .leader-head { display: inline-flex; align-items: center; gap: 4px; ${multiLeader ? 'cursor: pointer;' : ''} }
+          .leader-name { font-size: 14px; font-weight: 500; color: var(--primary-text-color); }
+          .leader-caret { --mdc-icon-size: 16px; color: var(--secondary-text-color); ${multiLeader ? '' : 'display: none;'} }
+          .leader-tag { font-size: 11px; color: var(--secondary-text-color); margin-left: 4px; }
           .group-row { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--divider-color, #e0e0e0); }
+          .group-name { font-size: 14px; font-weight: 500; color: var(--primary-text-color); }
           .room-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding-top: 12px;
             border-top: 1px solid var(--divider-color, #e0e0e0); }
           .room-toggle { flex: none; }
@@ -303,7 +440,6 @@ class HeosMultiroomCard extends HTMLElement {
           .icon-btn:hover { background: var(--divider-color, #e0e0e0); }
           .room-row.off .vol-row, .room-row.off .room-play { display: none; }
           .room-row.off .room-name { color: var(--secondary-text-color); font-weight: 400; }
-          .hint { font-size: 12px; color: var(--secondary-text-color); margin-top: 2px; }
         </style>
         <div class="acard">
           <div class="top-row">
@@ -315,16 +451,21 @@ class HeosMultiroomCard extends HTMLElement {
             </button>
             <div data-ref="src-menu"></div>
           </div>
-          <div class="amp-block">
-            <div class="amp-name" data-ref="amp-name"></div>
+          <div class="leader-block">
+            <span class="leader-head" data-ref="leader-head">
+              <span class="leader-name" data-ref="leader-name"></span>
+              <span class="leader-tag">leader</span>
+              <ha-icon class="leader-caret" icon="mdi:chevron-down"></ha-icon>
+            </span>
+            <div data-ref="leader-menu"></div>
             <div class="vol-row">
               <ha-icon class="vol-ic" icon="mdi:volume-medium"></ha-icon>
-              <input type="range" min="0" max="100" step="1" class="vol" data-ref="amp-vol" data-entity="${this._config.entity}">
-              <span class="vol-pct" data-ref="amp-pct"></span>
+              <input type="range" min="0" max="100" step="1" class="vol" data-ref="leader-vol" data-entity="${leader}">
+              <span class="vol-pct" data-ref="leader-pct"></span>
             </div>
           </div>
           <div class="group-row" data-ref="group-row" style="display:none;">
-            <div class="amp-name">All rooms</div>
+            <div class="group-name">All rooms</div>
             <div class="vol-row">
               <ha-icon class="vol-ic" icon="mdi:volume-source"></ha-icon>
               <input type="range" min="0" max="100" step="1" class="vol" data-ref="group-vol" data-entity="__group__">
@@ -345,18 +486,34 @@ class HeosMultiroomCard extends HTMLElement {
     this._els['src-btn'].addEventListener('click', (e) => {
       e.stopPropagation();
       this._showSources = !this._showSources;
-      this._renderSourceMenu();
+      this._showLeaders = false;
+      this._renderSourceMenu(leader);
+      this._renderLeaderMenu(leader);
     });
-    this._outside = (e) => {
-      if (this._showSources && !e.composedPath().includes(this)) {
+
+    // Leader dropdown
+    if (multiLeader) {
+      this._els['leader-head'].addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._showLeaders = !this._showLeaders;
         this._showSources = false;
-        this._renderSourceMenu();
+        this._renderLeaderMenu(leader);
+        this._renderSourceMenu(leader);
+      });
+    }
+
+    if (this._outside) document.removeEventListener('click', this._outside, true);
+    this._outside = (e) => {
+      if ((this._showSources || this._showLeaders) && !e.composedPath().includes(this)) {
+        this._showSources = false;
+        this._showLeaders = false;
+        this._renderSourceMenu(leader);
+        this._renderLeaderMenu(leader);
       }
     };
     document.addEventListener('click', this._outside, true);
 
-    // Volume sliders (leader, group, rooms) — live label while dragging,
-    // service call on release.
+    // Volume sliders — live label while dragging, service call on release.
     this.querySelectorAll('input[type=range].vol').forEach((slider) => {
       const entity = slider.getAttribute('data-entity');
       slider.addEventListener('input', () => {
@@ -366,20 +523,19 @@ class HeosMultiroomCard extends HTMLElement {
       slider.addEventListener('change', () => {
         const pct = parseInt(slider.value, 10);
         delete this._dragging[entity];
-        if (entity === '__group__') this._setGroupVolume(pct);
+        if (entity === '__group__') this._setGroupVolume(leader, pct);
         else this._setVolume(entity, pct);
       });
     });
 
-    // Room toggles and play/stop buttons
-    this._rooms.forEach((room, i) => {
+    // Room toggles and play/stop
+    rooms.forEach((room, i) => {
       const toggle = this._els[`toggle-${i}`];
       toggle.addEventListener('click', (e) => {
         e.preventDefault();
-        if (this._isJoined(room)) this._unjoinRoom(room);
-        else this._joinRoom(room);
-        // optimistic flip; real state confirms via hass updates
-        toggle.checked = !this._isJoined(room);
+        if (this._isJoined(leader, room)) this._unjoinRoom(room);
+        else this._joinRoom(leader, room);
+        toggle.checked = !this._isJoined(leader, room);
       });
       this._els[`play-${i}`].addEventListener('click', () => {
         const s = this._hass.states[room];
@@ -401,24 +557,21 @@ class HeosMultiroomCard extends HTMLElement {
 
   // --- in-place updates -------------------------------------------------
 
-  _updateDynamic() {
-    const leader = this._leader();
-    const attrs = leader.attributes || {};
+  _updateDynamic(leader) {
+    const l = this._hass.states[leader];
+    const attrs = (l && l.attributes) || {};
+    const rooms = this._rooms(leader);
 
-    // Header source
     this._setText(this._els['src-sub'], attrs.source || '—');
-    if (this._showSources) this._renderSourceMenu();
+    if (this._showSources) this._renderSourceMenu(leader);
 
-    // Leader volume
-    const ampName = this._config.amp_name || attrs.friendly_name || this._config.entity;
-    this._setText(this._els['amp-name'], ampName);
-    this._patchSlider('amp-vol', 'amp-pct', this._config.entity, attrs.volume_level);
+    this._setText(this._els['leader-name'], this._displayName(leader));
+    this._patchSlider('leader-vol', 'leader-pct', leader, attrs.volume_level);
 
-    // Group row visible when at least one configured room is joined
-    const joinedRooms = this._rooms.filter((r) => this._isJoined(r));
+    const joinedRooms = rooms.filter((r) => this._isJoined(leader, r));
     this._els['group-row'].style.display = joinedRooms.length ? '' : 'none';
     if (joinedRooms.length) {
-      const vols = [this._config.entity, ...joinedRooms]
+      const vols = [leader, ...joinedRooms]
         .map((e) => {
           const s = this._hass.states[e];
           return s && s.attributes ? s.attributes.volume_level : undefined;
@@ -428,16 +581,13 @@ class HeosMultiroomCard extends HTMLElement {
       this._patchSlider('group-vol', 'group-pct', '__group__', avg);
     }
 
-    // Rooms
-    this._rooms.forEach((room, i) => {
+    rooms.forEach((room, i) => {
       const row = this.querySelector(`.room-row[data-room="${CSS.escape(room)}"]`);
       const s = this._hass.states[room];
-      const joined = this._isJoined(room);
-      this._setText(this._els[`name-${i}`], this._roomName(room));
+      const joined = this._isJoined(leader, room);
+      this._setText(this._els[`name-${i}`], this._displayName(room));
       if (row) row.classList.toggle('off', !joined);
       const toggle = this._els[`toggle-${i}`];
-      // Honour a short optimistic window so the switch doesn't snap back
-      // while HEOS forms/dissolves the group.
       const pending = this._pendingJoin[room] && Date.now() - this._pendingJoin[room] < 8000;
       if (!pending && toggle.checked !== joined) toggle.checked = joined;
       if (pending && toggle.checked === joined) delete this._pendingJoin[room];
@@ -459,18 +609,20 @@ class HeosMultiroomCard extends HTMLElement {
 
   _updateSliderLabel(slider) {
     const ref = slider.getAttribute('data-ref');
-    const pctRef = ref === 'amp-vol' ? 'amp-pct' : ref === 'group-vol' ? 'group-pct' : ref.replace('vol-', 'pct-');
+    const pctRef =
+      ref === 'leader-vol' ? 'leader-pct' : ref === 'group-vol' ? 'group-pct' : ref.replace('vol-', 'pct-');
     this._setText(this._els[pctRef], `${slider.value}%`);
   }
 
-  _renderSourceMenu() {
+  _renderSourceMenu(leader) {
     const container = this._els['src-menu'];
+    if (!container) return;
     if (!this._showSources) {
       if (container.innerHTML !== '') container.innerHTML = '';
       return;
     }
-    const current = (this._leader().attributes || {}).source;
-    const sources = this._sourceList();
+    const current = ((this._hass.states[leader] || {}).attributes || {}).source;
+    const sources = this._sourceList(leader);
     container.innerHTML = `<div class="dropdown-menu">
       ${sources
         .map(
@@ -482,11 +634,34 @@ class HeosMultiroomCard extends HTMLElement {
     container.querySelectorAll('.dropdown-item').forEach((el) => {
       el.addEventListener('click', () => {
         this._callService('media_player', 'select_source', {
-          entity_id: this._config.entity,
+          entity_id: leader,
           source: el.getAttribute('data-src'),
         });
         this._showSources = false;
-        this._renderSourceMenu();
+        this._renderSourceMenu(leader);
+      });
+    });
+  }
+
+  _renderLeaderMenu(leader) {
+    const container = this._els['leader-menu'];
+    if (!container) return;
+    if (!this._showLeaders) {
+      if (container.innerHTML !== '') container.innerHTML = '';
+      return;
+    }
+    container.innerHTML = `<div class="dropdown-menu left">
+      ${this._players
+        .map(
+          (p) =>
+            `<div class="dropdown-item ${p === leader ? 'selected' : ''}" data-p="${p}">${this._displayName(p)}</div>`
+        )
+        .join('')}
+    </div>`;
+    container.querySelectorAll('.dropdown-item').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._switchLeader(el.getAttribute('data-p'));
       });
     });
   }
@@ -502,7 +677,7 @@ class HeosMultiroomCard extends HTMLElement {
 
 // ---------------------------------------------------------------------
 // Theme picker with gradient swatches (shared pattern with the mycrouch
-// card family — shows a sample chip per installed theme).
+// card family).
 // ---------------------------------------------------------------------
 class HeosThemePicker extends HTMLElement {
   constructor() {
@@ -631,7 +806,7 @@ class HeosThemePicker extends HTMLElement {
 }
 
 // ---------------------------------------------------------------------
-// GUI editor
+// GUI editor — with one-click server-side join-script setup.
 // ---------------------------------------------------------------------
 class HeosMultiroomCardEditor extends HTMLElement {
   constructor() {
@@ -639,17 +814,17 @@ class HeosMultiroomCardEditor extends HTMLElement {
     this._config = null;
     this._hass = null;
     this._form = null;
+    this._setupStatus = '';
   }
 
   set hass(hass) {
     this._hass = hass;
     if (this._form) this._form.hass = hass;
     if (this._picker) this._picker.hass = hass;
+    this._syncSetupRow();
   }
 
   setConfig(config) {
-    // Echo guard: HA re-feeds emitted config into setConfig; skip identical
-    // configs so typing in text fields doesn't lose focus.
     const normalized = JSON.stringify({ ...config, type: undefined });
     if (this._normalized === normalized) return;
     this._normalized = normalized;
@@ -658,6 +833,13 @@ class HeosMultiroomCardEditor extends HTMLElement {
     else if (config.gradient) this._mode = 'manual';
     else this._mode = 'default';
     this._render();
+  }
+
+  _players() {
+    if (Array.isArray(this._config.players)) return this._config.players;
+    if (this._config.entity)
+      return [this._config.entity, ...(this._config.rooms || [])];
+    return [];
   }
 
   _emit(config) {
@@ -674,14 +856,15 @@ class HeosMultiroomCardEditor extends HTMLElement {
   _buildConfig(v) {
     const config = {
       type: (this._config && this._config.type) || 'custom:heos-multiroom-card',
-      entity: v.entity,
     };
+    if (Array.isArray(v.players) && v.players.length) config.players = v.players;
+    if (v.default_leader && (config.players || []).includes(v.default_leader))
+      config.default_leader = v.default_leader;
     if (v.name) config.name = v.name;
-    if (v.amp_name) config.amp_name = v.amp_name;
-    if (Array.isArray(v.rooms) && v.rooms.length) config.rooms = v.rooms;
     if (v.join_script) config.join_script = v.join_script;
     if (Array.isArray(v.sources) && v.sources.length) config.sources = v.sources;
-    if (this._config && this._config.room_names) config.room_names = this._config.room_names;
+    if (this._config && (this._config.names || this._config.room_names))
+      config.names = this._config.names || this._config.room_names;
     if (v.mode === 'theme') {
       const th = v.theme || (this._config && this._config.theme);
       if (th) config.theme = th;
@@ -704,16 +887,89 @@ class HeosMultiroomCardEditor extends HTMLElement {
         const config = this._buildConfig(v);
         this._config = config;
         this._emit(config);
-        if (modeChanged) {
-          this._updateSchema(v);
-          this._syncPicker();
-        }
+        this._updateSchema(v);
+        if (modeChanged) this._syncPicker();
+        this._syncSetupRow();
       });
       this.appendChild(this._form);
     }
     this._updateSchema();
     if (this._hass) this._form.hass = this._hass;
     this._syncPicker();
+    this._syncSetupRow();
+  }
+
+  // One-click join-script setup: creates a generic server-side script via
+  // the config API and wires it into the card config. Admin only.
+  _syncSetupRow() {
+    if (!this._config) return;
+    if (!this._setupRow) {
+      this._setupRow = document.createElement('div');
+      this._setupRow.innerHTML = `
+        <style>
+          .setup-row { margin-top: 12px; padding: 12px; border: 1px dashed var(--divider-color, #ccc);
+            border-radius: 8px; }
+          .setup-row button { background: var(--primary-color, #03a9f4); color: #fff; border: none;
+            border-radius: 18px; padding: 8px 16px; font-weight: 500; cursor: pointer; }
+          .setup-row button[disabled] { opacity: .4; cursor: default; }
+          .setup-txt { font-size: 12px; color: var(--secondary-text-color); margin-bottom: 8px; }
+          .setup-status { font-size: 12px; margin-top: 8px; color: var(--primary-color); }
+        </style>
+        <div class="setup-row">
+          <div class="setup-txt" data-ref="txt"></div>
+          <button data-ref="btn">Create join script</button>
+          <div class="setup-status" data-ref="status"></div>
+        </div>`;
+      this._setupRow
+        .querySelector('[data-ref="btn"]')
+        .addEventListener('click', () => this._createJoinScript());
+      this.appendChild(this._setupRow);
+    }
+    const scriptEntity = `script.${HEOS_JOIN_SCRIPT_ID}`;
+    const exists = this._hass && this._hass.states[scriptEntity];
+    const isAdmin = this._hass && this._hass.user && this._hass.user.is_admin;
+    const configured = !!this._config.join_script;
+    const txt = this._setupRow.querySelector('[data-ref="txt"]');
+    const btn = this._setupRow.querySelector('[data-ref="btn"]');
+    const status = this._setupRow.querySelector('[data-ref="status"]');
+    if (configured && (this._config.join_script !== scriptEntity || exists)) {
+      txt.textContent = 'Join script configured — rooms will join reliably, even from analogue sources (turntable/CD).';
+      btn.style.display = 'none';
+    } else if (exists) {
+      txt.textContent = 'A join script already exists — click to use it for reliable analogue-source streaming.';
+      btn.style.display = '';
+      btn.disabled = false;
+      btn.textContent = 'Use existing join script';
+    } else {
+      txt.textContent =
+        'Recommended: create a small server-side script so rooms reliably start playing when joined from analogue sources (turntable/CD). One click, no YAML.';
+      btn.style.display = '';
+      btn.disabled = !isAdmin;
+      btn.textContent = isAdmin ? 'Create join script' : 'Create join script (admin users only)';
+    }
+    status.textContent = this._setupStatus;
+  }
+
+  async _createJoinScript() {
+    const scriptEntity = `script.${HEOS_JOIN_SCRIPT_ID}`;
+    try {
+      if (!this._hass.states[scriptEntity]) {
+        this._setupStatus = 'Creating script…';
+        this._syncSetupRow();
+        await this._hass.callApi(
+          'post',
+          `config/script/config/${HEOS_JOIN_SCRIPT_ID}`,
+          HEOS_JOIN_SCRIPT_CONFIG
+        );
+      }
+      const config = { ...this._config, join_script: scriptEntity };
+      this._config = config;
+      this._emit(config);
+      this._setupStatus = `Done — ${scriptEntity} created and configured.`;
+    } catch (err) {
+      this._setupStatus = `Failed: ${(err && err.message) || err}`;
+    }
+    this._render();
   }
 
   _syncPicker() {
@@ -735,35 +991,56 @@ class HeosMultiroomCardEditor extends HTMLElement {
       this._picker.remove();
       this._picker = null;
     }
+    // Keep the setup row last in the editor.
+    if (this._setupRow) this.appendChild(this._setupRow);
   }
 
   _updateSchema(current) {
     const g = this._config.gradient;
-    // Source options come live from the selected leader's source_list.
-    const leader =
-      this._hass && this._config.entity ? this._hass.states[this._config.entity] : null;
+    const players = (current && current.players) || this._players();
+    const friendly = (id) => {
+      const s = this._hass && this._hass.states[id];
+      return (s && s.attributes && s.attributes.friendly_name) || id;
+    };
+    const defaultLeader =
+      (current && current.default_leader) ||
+      this._config.default_leader ||
+      this._config.entity ||
+      players[0] ||
+      '';
+    // Source options from the default leader's live source_list.
+    const leaderState =
+      this._hass && defaultLeader ? this._hass.states[defaultLeader] : null;
     const sourceOptions =
-      (leader && leader.attributes && leader.attributes.source_list) || [];
+      (leaderState && leaderState.attributes && leaderState.attributes.source_list) || [];
     const schema = [
       {
-        name: 'entity',
-        label: 'Leader (AMP) media player',
+        name: 'players',
+        label: 'Players (leader candidates + rooms)',
         required: true,
-        selector: { entity: { domain: 'media_player' } },
-      },
-      {
-        name: 'rooms',
-        label: 'Room speakers',
         selector: { entity: { domain: 'media_player', multiple: true } },
       },
+    ];
+    if (players.length > 1) {
+      schema.push({
+        name: 'default_leader',
+        label: 'Default leader',
+        selector: {
+          select: {
+            mode: 'dropdown',
+            options: players.map((p) => ({ value: p, label: friendly(p) })),
+          },
+        },
+      });
+    }
+    schema.push(
       { name: 'name', label: 'Card title (optional)', selector: { text: {} } },
-      { name: 'amp_name', label: 'Leader display name (optional)', selector: { text: {} } },
       {
         name: 'join_script',
-        label: 'Join script (optional — reliable analogue streaming)',
+        label: 'Join script (optional — created by the button below)',
         selector: { entity: { domain: 'script' } },
-      },
-    ];
+      }
+    );
     if (sourceOptions.length) {
       schema.push({
         name: 'sources',
@@ -795,10 +1072,9 @@ class HeosMultiroomCardEditor extends HTMLElement {
     }
     this._form.schema = schema;
     this._form.data = {
-      entity: (current && current.entity) || this._config.entity || '',
-      rooms: (current && current.rooms) || this._config.rooms || [],
+      players,
+      default_leader: defaultLeader,
       name: (current && current.name) || this._config.name || '',
-      amp_name: (current && current.amp_name) || this._config.amp_name || '',
       join_script: (current && current.join_script) || this._config.join_script || '',
       sources: (current && current.sources) || this._config.sources || [],
       mode: this._mode,
@@ -820,7 +1096,7 @@ window.customCards.push({
   preview: true,
   documentationURL: 'https://github.com/mycrouch/heos-multiroom-card',
   description:
-    'One-card multi-room audio for a HEOS group leader: source picker, leader and all-rooms volume, and per-room join/volume/play-stop rows, with reliable analogue-source streaming via an optional join script.',
+    'One-card HEOS multi-room audio: switchable group leader with source picker, per-room join toggles, individual + all-rooms volume and play/stop, and one-click setup of a server-side join script for reliable analogue-source streaming.',
 });
 
 console.info(
