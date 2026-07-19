@@ -1,5 +1,5 @@
 /*
- * HEOS Multiroom Card v1.3.0
+ * HEOS Multiroom Card v1.3.1
  * https://github.com/mycrouch/heos-multiroom-card
  *
  * One-card multi-room audio for HEOS: pick a group leader from your pool of
@@ -13,7 +13,7 @@
  * MIT License — Jason Crouch. Icons: Material Design Icons via ha-icon.
  */
 
-const HEOS_CARD_VERSION = '1.3.0';
+const HEOS_CARD_VERSION = '1.3.1';
 const HEOS_JOIN_SCRIPT_ID = 'heos_join_room';
 
 // Server-side companion script created by the editor's one-click setup.
@@ -371,7 +371,7 @@ class HeosMultiroomCard extends HTMLElement {
         <div class="room-row" data-room="${room}">
           <ha-switch class="room-toggle" data-ref="toggle-${i}"></ha-switch>
           <div class="room-main">
-            <div class="room-name" data-ref="name-${i}"></div>
+            <div class="room-name"><span data-ref="name-${i}"></span><span class="state-tag" data-ref="state-${i}"></span></div>
             <div class="vol-row">
               <ha-icon class="vol-ic" icon="mdi:volume-medium"></ha-icon>
               <input type="range" min="0" max="100" step="1" class="vol" data-ref="vol-${i}" data-entity="${room}">
@@ -399,6 +399,9 @@ class HeosMultiroomCard extends HTMLElement {
           ha-card.grad .icon-btn { background: rgba(255,255,255,0.12); }
           ha-card.grad .icon-btn:hover { background: rgba(255,255,255,0.2); }
           ha-card.grad .icon-btn ha-icon { color: #fff; }
+          ha-card.grad .icon-btn.active { background: rgba(255,255,255,0.85); }
+          ha-card.grad .icon-btn.active ha-icon { color: #1565c0; }
+          ha-card.grad .state-tag { color: rgba(255,255,255,0.72); }
           ha-card.grad .dropdown-menu { background: #262b30; color: #fff; }
           ha-card.grad .dropdown-item:hover { background: rgba(255,255,255,0.1); }
           ha-card.grad .room-row { border-top-color: rgba(255,255,255,0.14); }
@@ -441,6 +444,9 @@ class HeosMultiroomCard extends HTMLElement {
             justify-content: center; cursor: pointer; flex: none; }
           .icon-btn:hover { background: var(--divider-color, #e0e0e0); }
           .icon-btn.muted ha-icon { color: var(--error-color, #db4437); }
+          .icon-btn.active { background: var(--primary-color, #03a9f4); }
+          .icon-btn.active ha-icon { color: #fff; }
+          .state-tag { font-size: 11px; color: var(--primary-color, #03a9f4); margin-left: 6px; font-weight: 500; }
           .room-row.off .vol-row, .room-row.off .room-play, .room-row.off [data-ref^="mute-"] { display: none; }
           .room-row.off .room-name { color: var(--secondary-text-color); font-weight: 400; }
         </style>
@@ -594,6 +600,10 @@ class HeosMultiroomCard extends HTMLElement {
         this._patchMute(`mute-${i}`, `muteicon-${i}`, a.is_volume_muted);
         const playing = s.state === 'playing';
         this._setIcon(this._els[`playicon-${i}`], playing ? 'mdi:stop' : 'mdi:play');
+        this._els[`play-${i}`].classList.toggle('active', playing);
+        this._setText(this._els[`state-${i}`], playing ? 'playing' : '');
+      } else {
+        this._setText(this._els[`state-${i}`], '');
       }
     });
   }
