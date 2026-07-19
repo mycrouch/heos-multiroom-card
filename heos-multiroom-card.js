@@ -1,5 +1,5 @@
 /*
- * HEOS Multiroom Card v1.3.1
+ * HEOS Multiroom Card v1.4.0
  * https://github.com/mycrouch/heos-multiroom-card
  *
  * One-card multi-room audio for HEOS: pick a group leader from your pool of
@@ -13,7 +13,7 @@
  * MIT License — Jason Crouch. Icons: Material Design Icons via ha-icon.
  */
 
-const HEOS_CARD_VERSION = '1.3.1';
+const HEOS_CARD_VERSION = '1.4.0';
 const HEOS_JOIN_SCRIPT_ID = 'heos_join_room';
 
 // Server-side companion script created by the editor's one-click setup.
@@ -235,7 +235,13 @@ class HeosMultiroomCard extends HTMLElement {
   _sourceList(leader) {
     const l = this._hass.states[leader];
     const all = (l && l.attributes && l.attributes.source_list) || [];
-    const filter = this._config.sources;
+    // sources: per-leader map {entity: [..]} (v1.4+), or legacy flat array
+    // applied to every leader. HEOS shares all inputs system-wide, so this
+    // is a per-leader presentation filter, not a capability limit.
+    const cfg = this._config.sources;
+    let filter = null;
+    if (cfg && typeof cfg === 'object' && !Array.isArray(cfg)) filter = cfg[leader];
+    else if (Array.isArray(cfg)) filter = cfg;
     if (Array.isArray(filter) && filter.length) {
       const filtered = filter.filter((s) => all.includes(s));
       if (filtered.length) return filtered;
@@ -876,7 +882,12 @@ class HeosMultiroomCardEditor extends HTMLElement {
       config.default_leader = v.default_leader;
     if (v.name) config.name = v.name;
     if (v.join_script) config.join_script = v.join_script;
-    if (Array.isArray(v.sources) && v.sources.length) config.sources = v.sources;
+    const srcMap = {};
+    (config.players || []).forEach((p, i) => {
+      const list = v[`src_${i}`];
+      if (Array.isArray(list) && list.length) srcMap[p] = list;
+    });
+    if (Object.keys(srcMap).length) config.sources = srcMap;
     if (this._config && (this._config.names || this._config.room_names))
       config.names = this._config.names || this._config.room_names;
     if (v.mode === 'theme') {
@@ -1022,11 +1033,6 @@ class HeosMultiroomCardEditor extends HTMLElement {
       this._config.entity ||
       players[0] ||
       '';
-    // Source options from the default leader's live source_list.
-    const leaderState =
-      this._hass && defaultLeader ? this._hass.states[defaultLeader] : null;
-    const sourceOptions =
-      (leaderState && leaderState.attributes && leaderState.attributes.source_list) || [];
     const schema = [
       {
         name: 'players',
@@ -1055,15 +1061,22 @@ class HeosMultiroomCardEditor extends HTMLElement {
         selector: { entity: { domain: 'script' } },
       }
     );
-    if (sourceOptions.length) {
-      schema.push({
-        name: 'sources',
-        label: 'Sources to show (optional filter)',
-        selector: {
-          select: { multiple: true, mode: 'dropdown', options: sourceOptions },
-        },
-      });
-    }
+    // Per-leader source filters: one multi-select per player, shown only
+    // when that player leads. HEOS lists every input on every player, so
+    // this is how users keep each leader's dropdown to its own inputs.
+    players.forEach((p, i) => {
+      const ps = this._hass && this._hass.states[p];
+      const opts = (ps && ps.attributes && ps.attributes.source_list) || [];
+      if (opts.length) {
+        schema.push({
+          name: `src_${i}`,
+          label: `Sources shown when ${friendly(p)} leads (optional filter)`,
+          selector: {
+            select: { multiple: true, mode: 'dropdown', options: opts },
+          },
+        });
+      }
+    });
     schema.push({
       name: 'mode',
       label: 'Style',
@@ -1085,17 +1098,24 @@ class HeosMultiroomCardEditor extends HTMLElement {
       );
     }
     this._form.schema = schema;
-    this._form.data = {
+    const data = {
       players,
       default_leader: defaultLeader,
       name: (current && current.name) || this._config.name || '',
       join_script: (current && current.join_script) || this._config.join_script || '',
-      sources: (current && current.sources) || this._config.sources || [],
       mode: this._mode,
       theme: (current && current.theme) || this._config.theme || '',
       gradient_from: (current && current.gradient_from) || (Array.isArray(g) ? g[0] : ''),
       gradient_to: (current && current.gradient_to) || (Array.isArray(g) ? g[1] : ''),
     };
+    const cfgS = this._config.sources;
+    players.forEach((p, i) => {
+      let pre = [];
+      if (cfgS && typeof cfgS === 'object' && !Array.isArray(cfgS)) pre = cfgS[p] || [];
+      else if (Array.isArray(cfgS)) pre = cfgS;
+      data[`src_${i}`] = (current && current[`src_${i}`]) || pre;
+    });
+    this._form.data = data;
   }
 }
 
