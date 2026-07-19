@@ -1,18 +1,19 @@
 /*
- * HEOS Multiroom Card v1.2.1
+ * HEOS Multiroom Card v1.3.0
  * https://github.com/mycrouch/heos-multiroom-card
  *
  * One-card multi-room audio for HEOS: pick a group leader from your pool of
  * players (any HEOS unit with a physical input can lead — AVR turntable,
  * a speaker's AUX/USB), toggle rooms in and out of the group, and control
- * every volume — all rooms at once or each individually. Pairs with a small
+ * every device's volume and mute individually — including muting the leader
+ * locally while its source keeps streaming to the rooms. Pairs with a small
  * server-side join script (one-click creation from the card editor) that
  * works around HEOS's silent-follower bug on analogue sources.
  *
  * MIT License — Jason Crouch. Icons: Material Design Icons via ha-icon.
  */
 
-const HEOS_CARD_VERSION = '1.2.1';
+const HEOS_CARD_VERSION = '1.3.0';
 const HEOS_JOIN_SCRIPT_ID = 'heos_join_room';
 
 // Server-side companion script created by the editor's one-click setup.
@@ -112,7 +113,7 @@ class HeosMultiroomCard extends HTMLElement {
   }
 
   setConfig(config) {
-    // v1.2 config: players + default_leader. Back-compat with v1.0/1.1
+    // v1.2+ config: players + default_leader. Back-compat with v1.0/1.1
     // entity + rooms (absent new option = previous behaviour).
     let players = Array.isArray(config.players) ? [...config.players] : null;
     let defaultLeader = config.default_leader || null;
@@ -186,7 +187,7 @@ class HeosMultiroomCard extends HTMLElement {
       }
       const a = s.attributes || {};
       parts.push(
-        `${id}:${s.state}:${a.source || ''}:${a.volume_level ?? ''}:${(a.group_members || []).join(',')}`
+        `${id}:${s.state}:${a.source || ''}:${a.volume_level ?? ''}:${a.is_volume_muted ? 'm' : ''}:${(a.group_members || []).join(',')}`
       );
     });
     return parts.join('|');
@@ -237,8 +238,6 @@ class HeosMultiroomCard extends HTMLElement {
     const filter = this._config.sources;
     if (Array.isArray(filter) && filter.length) {
       const filtered = filter.filter((s) => all.includes(s));
-      // The filter is leader-specific; if it matches nothing on this
-      // leader (e.g. leader switched from AVR to a speaker), show all.
       if (filtered.length) return filtered;
     }
     return all;
@@ -267,6 +266,15 @@ class HeosMultiroomCard extends HTMLElement {
     this._callService('media_player', 'unjoin', { entity_id: room });
   }
 
+  _toggleMute(entityId) {
+    const s = this._hass.states[entityId];
+    const muted = !!(s && s.attributes && s.attributes.is_volume_muted);
+    this._callService('media_player', 'volume_mute', {
+      entity_id: entityId,
+      is_volume_muted: !muted,
+    });
+  }
+
   _switchLeader(newLeader) {
     const oldLeader = this._currentLeader();
     if (newLeader === oldLeader) return;
@@ -290,12 +298,6 @@ class HeosMultiroomCard extends HTMLElement {
       entity_id: entityId,
       volume_level: Math.min(1, Math.max(0, pct / 100)),
     });
-  }
-
-  _setGroupVolume(leader, pct) {
-    const members = this._groupMembers(leader);
-    const targets = members.length ? members : [leader];
-    targets.forEach((e) => this._setVolume(e, pct));
   }
 
   // Gradient presets shared with mycrouch/gradient-themes.
@@ -376,6 +378,9 @@ class HeosMultiroomCard extends HTMLElement {
               <span class="vol-pct" data-ref="pct-${i}"></span>
             </div>
           </div>
+          <button class="icon-btn" data-ref="mute-${i}" title="Mute / unmute">
+            <ha-icon data-ref="muteicon-${i}" icon="mdi:volume-high"></ha-icon>
+          </button>
           <button class="icon-btn room-play" data-ref="play-${i}" title="Play / stop">
             <ha-icon data-ref="playicon-${i}" icon="mdi:play"></ha-icon>
           </button>
@@ -386,8 +391,8 @@ class HeosMultiroomCard extends HTMLElement {
     this.innerHTML = `
       <ha-card class="${grad ? 'grad' : ''}" style="${grad ? `background:${grad};border:none;` : ''}">
         <style>
-          ha-card.grad .title, ha-card.grad .room-name, ha-card.grad .leader-name { color: #fff; }
-          ha-card.grad .sub, ha-card.grad .vol-pct, ha-card.grad .vol-ic, ha-card.grad .leader-caret { color: rgba(255,255,255,0.72); }
+          ha-card.grad .title, ha-card.grad .room-name { color: #fff; }
+          ha-card.grad .sub, ha-card.grad .vol-pct, ha-card.grad .vol-ic, ha-card.grad .leader-tag { color: rgba(255,255,255,0.72); }
           ha-card.grad .src-btn { background: rgba(255,255,255,0.12); color: #fff; }
           ha-card.grad .src-btn:hover { background: rgba(255,255,255,0.2); }
           ha-card.grad .src-btn ha-icon { color: #fff; }
@@ -396,25 +401,27 @@ class HeosMultiroomCard extends HTMLElement {
           ha-card.grad .icon-btn ha-icon { color: #fff; }
           ha-card.grad .dropdown-menu { background: #262b30; color: #fff; }
           ha-card.grad .dropdown-item:hover { background: rgba(255,255,255,0.1); }
-          ha-card.grad .room-row, ha-card.grad .group-row { border-top-color: rgba(255,255,255,0.14); }
+          ha-card.grad .room-row { border-top-color: rgba(255,255,255,0.14); }
           ha-card.grad input[type=range] { accent-color: #fff; }
         </style>
         <style>
           .acard { padding: 16px; }
-          .top-row { display: flex; align-items: center; gap: 10px; position: relative; }
-          .title { font-size: 20px; font-weight: 500; color: var(--primary-text-color); flex: 1; min-width: 0; }
-          .sub { font-size: 12px; color: var(--secondary-text-color); }
-          .src-btn { border: none; border-radius: 12px; background: var(--secondary-background-color, #f2f2f2);
+          .title { font-size: 20px; font-weight: 500; color: var(--primary-text-color); }
+          .ctrl-row { display: flex; gap: 10px; margin-top: 12px; }
+          .ctrl-wrap { position: relative; flex: 1; min-width: 0; }
+          .src-btn { width: 100%; border: none; border-radius: 12px; background: var(--secondary-background-color, #f2f2f2);
             padding: 8px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px;
-            color: var(--primary-text-color); font-family: inherit; max-width: 55%; }
+            color: var(--primary-text-color); font-family: inherit; }
           .src-btn:hover { background: var(--divider-color, #e0e0e0); }
+          .src-btn[disabled] { cursor: default; }
           .src-btn .src-label { display: block; font-size: 11px; color: var(--secondary-text-color); text-align: left; }
-          .src-btn .src-sub { display: block; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .src-btn .src-sub { display: block; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+          .src-btn > span { min-width: 0; flex: 1; }
           .src-btn ha-icon { --mdc-icon-size: 18px; flex: none; }
-          .dropdown-menu { position: absolute; top: 44px; right: 0; background: var(--card-background-color, #fff);
-            box-shadow: 0 2px 8px rgba(0,0,0,0.25); border-radius: 8px; padding: 4px 0; z-index: 5; min-width: 170px;
+          .dropdown-menu { position: absolute; top: calc(100% + 4px); left: 0; min-width: 100%;
+            background: var(--card-background-color, #fff);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.25); border-radius: 8px; padding: 4px 0; z-index: 5;
             max-height: min(65vh, 440px); overflow: auto; overscroll-behavior: contain; }
-          .dropdown-menu.left { right: auto; left: 0; top: 26px; }
           .dropdown-item { padding: 10px 16px; cursor: pointer; font-size: 14px; color: var(--primary-text-color); white-space: nowrap; }
           .dropdown-item:hover { background: var(--secondary-background-color, #f2f2f2); }
           .dropdown-item.selected { color: var(--primary-color); font-weight: 600; }
@@ -422,15 +429,10 @@ class HeosMultiroomCard extends HTMLElement {
           .vol-ic { --mdc-icon-size: 18px; color: var(--secondary-text-color); flex: none; }
           input[type=range].vol { flex: 1; accent-color: var(--primary-color, #03a9f4); height: 22px; margin: 0; min-width: 0; }
           .vol-pct { font-size: 12px; color: var(--secondary-text-color); width: 34px; text-align: right; flex: none; }
-          .leader-block { margin-top: 14px; position: relative; }
-          .leader-head { display: inline-flex; align-items: center; gap: 4px; ${multiLeader ? 'cursor: pointer;' : ''} }
-          .leader-name { font-size: 14px; font-weight: 500; color: var(--primary-text-color); }
-          .leader-caret { --mdc-icon-size: 16px; color: var(--secondary-text-color); ${multiLeader ? '' : 'display: none;'} }
-          .leader-tag { font-size: 11px; color: var(--secondary-text-color); margin-left: 4px; }
-          .group-row { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--divider-color, #e0e0e0); }
-          .group-name { font-size: 14px; font-weight: 500; color: var(--primary-text-color); }
+          .leader-tag { font-size: 11px; color: var(--secondary-text-color); margin-left: 6px; font-weight: 400; }
           .room-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding-top: 12px;
             border-top: 1px solid var(--divider-color, #e0e0e0); }
+          .room-row.leader-row { border-top: none; padding-top: 0; margin-top: 14px; }
           .room-toggle { flex: none; }
           .room-main { flex: 1; min-width: 0; }
           .room-name { font-size: 14px; font-weight: 500; color: var(--primary-text-color); }
@@ -438,39 +440,42 @@ class HeosMultiroomCard extends HTMLElement {
             background: var(--secondary-background-color, #f2f2f2); display: flex; align-items: center;
             justify-content: center; cursor: pointer; flex: none; }
           .icon-btn:hover { background: var(--divider-color, #e0e0e0); }
-          .room-row.off .vol-row, .room-row.off .room-play { display: none; }
+          .icon-btn.muted ha-icon { color: var(--error-color, #db4437); }
+          .room-row.off .vol-row, .room-row.off .room-play, .room-row.off [data-ref^="mute-"] { display: none; }
           .room-row.off .room-name { color: var(--secondary-text-color); font-weight: 400; }
         </style>
         <div class="acard">
-          <div class="top-row">
-            <div class="title">${title}</div>
-            <button class="src-btn" data-ref="src-btn">
-              <ha-icon icon="mdi:import"></ha-icon>
-              <span style="min-width:0;"><span class="src-label">Source</span><span class="src-sub" data-ref="src-sub">—</span></span>
-              <ha-icon icon="mdi:chevron-down"></ha-icon>
+          <div class="title">${title}</div>
+          <div class="ctrl-row">
+            <div class="ctrl-wrap">
+              <button class="src-btn" data-ref="src-btn">
+                <ha-icon icon="mdi:import"></ha-icon>
+                <span><span class="src-label">Source</span><span class="src-sub" data-ref="src-sub">—</span></span>
+                <ha-icon icon="mdi:chevron-down"></ha-icon>
+              </button>
+              <div data-ref="src-menu"></div>
+            </div>
+            <div class="ctrl-wrap">
+              <button class="src-btn" data-ref="leader-btn" ${multiLeader ? '' : 'disabled'}>
+                <ha-icon icon="mdi:account-music"></ha-icon>
+                <span><span class="src-label">Leader</span><span class="src-sub" data-ref="leader-sub">—</span></span>
+                <ha-icon icon="mdi:chevron-down" style="${multiLeader ? '' : 'visibility:hidden;'}"></ha-icon>
+              </button>
+              <div data-ref="leader-menu"></div>
+            </div>
+          </div>
+          <div class="room-row leader-row">
+            <div class="room-main">
+              <div class="room-name"><span data-ref="leader-name"></span><span class="leader-tag">leader</span></div>
+              <div class="vol-row">
+                <ha-icon class="vol-ic" icon="mdi:volume-medium"></ha-icon>
+                <input type="range" min="0" max="100" step="1" class="vol" data-ref="leader-vol" data-entity="${leader}">
+                <span class="vol-pct" data-ref="leader-pct"></span>
+              </div>
+            </div>
+            <button class="icon-btn" data-ref="mute-leader" title="Mute / unmute (stream to rooms keeps playing)">
+              <ha-icon data-ref="muteicon-leader" icon="mdi:volume-high"></ha-icon>
             </button>
-            <div data-ref="src-menu"></div>
-          </div>
-          <div class="leader-block">
-            <span class="leader-head" data-ref="leader-head">
-              <span class="leader-name" data-ref="leader-name"></span>
-              <span class="leader-tag">leader</span>
-              <ha-icon class="leader-caret" icon="mdi:chevron-down"></ha-icon>
-            </span>
-            <div data-ref="leader-menu"></div>
-            <div class="vol-row">
-              <ha-icon class="vol-ic" icon="mdi:volume-medium"></ha-icon>
-              <input type="range" min="0" max="100" step="1" class="vol" data-ref="leader-vol" data-entity="${leader}">
-              <span class="vol-pct" data-ref="leader-pct"></span>
-            </div>
-          </div>
-          <div class="group-row" data-ref="group-row" style="display:none;">
-            <div class="group-name">All rooms</div>
-            <div class="vol-row">
-              <ha-icon class="vol-ic" icon="mdi:volume-source"></ha-icon>
-              <input type="range" min="0" max="100" step="1" class="vol" data-ref="group-vol" data-entity="__group__">
-              <span class="vol-pct" data-ref="group-pct"></span>
-            </div>
           </div>
           <div data-ref="rooms">${roomRows}</div>
         </div>
@@ -493,7 +498,7 @@ class HeosMultiroomCard extends HTMLElement {
 
     // Leader dropdown
     if (multiLeader) {
-      this._els['leader-head'].addEventListener('click', (e) => {
+      this._els['leader-btn'].addEventListener('click', (e) => {
         e.stopPropagation();
         this._showLeaders = !this._showLeaders;
         this._showSources = false;
@@ -523,12 +528,14 @@ class HeosMultiroomCard extends HTMLElement {
       slider.addEventListener('change', () => {
         const pct = parseInt(slider.value, 10);
         delete this._dragging[entity];
-        if (entity === '__group__') this._setGroupVolume(leader, pct);
-        else this._setVolume(entity, pct);
+        this._setVolume(entity, pct);
       });
     });
 
-    // Room toggles and play/stop
+    // Leader mute
+    this._els['mute-leader'].addEventListener('click', () => this._toggleMute(leader));
+
+    // Room toggles, mute, play/stop
     rooms.forEach((room, i) => {
       const toggle = this._els[`toggle-${i}`];
       toggle.addEventListener('click', (e) => {
@@ -537,6 +544,7 @@ class HeosMultiroomCard extends HTMLElement {
         else this._joinRoom(leader, room);
         toggle.checked = !this._isJoined(leader, room);
       });
+      this._els[`mute-${i}`].addEventListener('click', () => this._toggleMute(room));
       this._els[`play-${i}`].addEventListener('click', () => {
         const s = this._hass.states[room];
         const playing = s && s.state === 'playing';
@@ -563,27 +571,17 @@ class HeosMultiroomCard extends HTMLElement {
     const rooms = this._rooms(leader);
 
     this._setText(this._els['src-sub'], attrs.source || '—');
+    this._setText(this._els['leader-sub'], this._displayName(leader));
     if (this._showSources) this._renderSourceMenu(leader);
 
     this._setText(this._els['leader-name'], this._displayName(leader));
     this._patchSlider('leader-vol', 'leader-pct', leader, attrs.volume_level);
-
-    const joinedRooms = rooms.filter((r) => this._isJoined(leader, r));
-    this._els['group-row'].style.display = joinedRooms.length ? '' : 'none';
-    if (joinedRooms.length) {
-      const vols = [leader, ...joinedRooms]
-        .map((e) => {
-          const s = this._hass.states[e];
-          return s && s.attributes ? s.attributes.volume_level : undefined;
-        })
-        .filter((v) => typeof v === 'number');
-      const avg = vols.length ? vols.reduce((a, b) => a + b, 0) / vols.length : 0;
-      this._patchSlider('group-vol', 'group-pct', '__group__', avg);
-    }
+    this._patchMute('mute-leader', 'muteicon-leader', attrs.is_volume_muted);
 
     rooms.forEach((room, i) => {
       const row = this.querySelector(`.room-row[data-room="${CSS.escape(room)}"]`);
       const s = this._hass.states[room];
+      const a = (s && s.attributes) || {};
       const joined = this._isJoined(leader, room);
       this._setText(this._els[`name-${i}`], this._displayName(room));
       if (row) row.classList.toggle('off', !joined);
@@ -592,11 +590,18 @@ class HeosMultiroomCard extends HTMLElement {
       if (!pending && toggle.checked !== joined) toggle.checked = joined;
       if (pending && toggle.checked === joined) delete this._pendingJoin[room];
       if (joined && s) {
-        this._patchSlider(`vol-${i}`, `pct-${i}`, room, (s.attributes || {}).volume_level);
+        this._patchSlider(`vol-${i}`, `pct-${i}`, room, a.volume_level);
+        this._patchMute(`mute-${i}`, `muteicon-${i}`, a.is_volume_muted);
         const playing = s.state === 'playing';
         this._setIcon(this._els[`playicon-${i}`], playing ? 'mdi:stop' : 'mdi:play');
       }
     });
+  }
+
+  _patchMute(btnRef, iconRef, muted) {
+    const btn = this._els[btnRef];
+    if (btn) btn.classList.toggle('muted', !!muted);
+    this._setIcon(this._els[iconRef], muted ? 'mdi:volume-off' : 'mdi:volume-high');
   }
 
   _patchSlider(sliderRef, pctRef, entity, volumeLevel) {
@@ -609,8 +614,7 @@ class HeosMultiroomCard extends HTMLElement {
 
   _updateSliderLabel(slider) {
     const ref = slider.getAttribute('data-ref');
-    const pctRef =
-      ref === 'leader-vol' ? 'leader-pct' : ref === 'group-vol' ? 'group-pct' : ref.replace('vol-', 'pct-');
+    const pctRef = ref === 'leader-vol' ? 'leader-pct' : ref.replace('vol-', 'pct-');
     this._setText(this._els[pctRef], `${slider.value}%`);
   }
 
@@ -650,7 +654,7 @@ class HeosMultiroomCard extends HTMLElement {
       if (container.innerHTML !== '') container.innerHTML = '';
       return;
     }
-    container.innerHTML = `<div class="dropdown-menu left">
+    container.innerHTML = `<div class="dropdown-menu">
       ${this._players
         .map(
           (p) =>
@@ -1096,7 +1100,7 @@ window.customCards.push({
   preview: true,
   documentationURL: 'https://github.com/mycrouch/heos-multiroom-card',
   description:
-    'One-card HEOS multi-room audio: switchable group leader with source picker, per-room join toggles, individual + all-rooms volume and play/stop, and one-click setup of a server-side join script for reliable analogue-source streaming.',
+    'One-card HEOS multi-room audio: switchable group leader with source picker, per-room join toggles, per-device volume and mute (mute the leader locally while it streams to rooms), and one-click setup of a server-side join script for reliable analogue-source streaming.',
 });
 
 console.info(
