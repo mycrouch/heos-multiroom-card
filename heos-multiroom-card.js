@@ -1,5 +1,5 @@
 /*
- * HEOS Multiroom Card v1.2.0
+ * HEOS Multiroom Card v1.2.1
  * https://github.com/mycrouch/heos-multiroom-card
  *
  * One-card multi-room audio for HEOS: pick a group leader from your pool of
@@ -12,7 +12,7 @@
  * MIT License — Jason Crouch. Icons: Material Design Icons via ha-icon.
  */
 
-const HEOS_CARD_VERSION = '1.2.0';
+const HEOS_CARD_VERSION = '1.2.1';
 const HEOS_JOIN_SCRIPT_ID = 'heos_join_room';
 
 // Server-side companion script created by the editor's one-click setup.
@@ -413,7 +413,7 @@ class HeosMultiroomCard extends HTMLElement {
           .src-btn ha-icon { --mdc-icon-size: 18px; flex: none; }
           .dropdown-menu { position: absolute; top: 44px; right: 0; background: var(--card-background-color, #fff);
             box-shadow: 0 2px 8px rgba(0,0,0,0.25); border-radius: 8px; padding: 4px 0; z-index: 5; min-width: 170px;
-            max-height: 260px; overflow: auto; }
+            max-height: min(65vh, 440px); overflow: auto; overscroll-behavior: contain; }
           .dropdown-menu.left { right: auto; left: 0; top: 26px; }
           .dropdown-item { padding: 10px 16px; cursor: pointer; font-size: 14px; color: var(--primary-text-color); white-space: nowrap; }
           .dropdown-item:hover { background: var(--secondary-background-color, #f2f2f2); }
