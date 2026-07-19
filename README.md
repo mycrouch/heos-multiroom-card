@@ -68,6 +68,7 @@ For network sources plain `media_player.join` is fine. For analogue sources (tur
 
 ## Notes
 
+- **AVR input sharing is tied to the main zone** (verified on a Denon AVR-S650H): the receiver streams *whatever its main zone is switched to*, and changing its source cuts/retunes what remote players receive. You cannot play the AVR's CD locally while streaming its turntable elsewhere. Practical upshot: lead with the AVR for AVR inputs (mute its row if you don't want it audible locally — the stream keeps flowing), and use the per-leader source filters so each leader only offers inputs it actually owns. HDMI-based AVR sources generally can't be shared to other players at all.
 - Room join state is read from the leader's `group_members`, so groups formed in the HEOS app show correctly here too.
 - HEOS speakers expose play/stop (not pause) for grouped analogue streams — the room button reflects that.
 - The all-rooms slider sets each member to the same level (leader included).
