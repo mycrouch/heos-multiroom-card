@@ -8,6 +8,7 @@ Born of a real frustration: the HEOS app regularly forms a group from an analogu
 
 - **Switchable group leader** — configure a pool of players; any of them can lead (an AVR's turntable, a speaker's AUX/USB input). Tap the leader name to hand leadership to another unit; the card also live-detects groups formed in the HEOS app (HA lists the leader first in `group_members`). Switching leader dissolves the current group first.
 - **Source picker** — dropdown of the current leader's sources, optionally filtered to the ones you actually use (hide that Cameras input).
+- **Receiver companion controls** — link a player to its AVR entity (e.g. Denon receivers expose a second, richer entity via the denonavr integration) and the card gains a power button and a Sound mode dropdown (Stereo, Pure Direct, Movie…) whenever that player leads.
 - **One-click join-script setup** — the editor offers a button that creates the server-side companion script for you (admin users). No YAML, no docs detour.
 - **Per-room join toggles** — flip a room on and it joins the leader's group (via the join script for reliable analogue streaming, or plain `media_player.join`); flip it off to unjoin. Rows expand with controls only when a room is active.
 - **All-rooms volume** — one slider that sets every current group member, alongside individual sliders for the AMP and each room.
@@ -47,6 +48,8 @@ sources:                                  # optional filter of source_list
   - TV
 names:                                    # optional display overrides (YAML only)
   media_player.dining_room: Dining
+avr_entities:                             # optional receiver companions
+  media_player.denon_amp_2: media_player.denon_amp
 ```
 
 | Option | Default | Description |
@@ -57,6 +60,7 @@ names:                                    # optional display overrides (YAML onl
 | `join_script` | none | Script called with `leader:` + `room:` to join reliably; falls back to `media_player.join` |
 | `sources` | all | Subset/order of the leader's `source_list` to show (ignored for leaders it doesn't match) |
 | `names` | friendly names | Per-player display name overrides |
+| `avr_entities` | none | Map of player → its receiver entity (e.g. from the denonavr integration). When that player leads, the card adds a receiver power button and a Sound mode dropdown |
 | `theme` | none | Apply an installed theme to this card only |
 | `gradient` | none | `[from, to]` manual gradient colours |
 

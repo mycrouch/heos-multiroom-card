@@ -1,5 +1,5 @@
 /*
- * HEOS Multiroom Card v1.4.0
+ * HEOS Multiroom Card v1.5.0
  * https://github.com/mycrouch/heos-multiroom-card
  *
  * One-card multi-room audio for HEOS: pick a group leader from your pool of
@@ -13,7 +13,7 @@
  * MIT License — Jason Crouch. Icons: Material Design Icons via ha-icon.
  */
 
-const HEOS_CARD_VERSION = '1.4.0';
+const HEOS_CARD_VERSION = '1.5.0';
 const HEOS_JOIN_SCRIPT_ID = 'heos_join_room';
 
 // Server-side companion script created by the editor's one-click setup.
@@ -131,12 +131,17 @@ class HeosMultiroomCard extends HTMLElement {
     this._players = players;
     this._defaultLeader = defaultLeader;
     this._names = config.names || config.room_names || {};
+    // Optional map: HEOS player -> its receiver entity (e.g. from the
+    // denonavr integration). Adds power + sound-mode controls when that
+    // player is the leader.
+    this._avrMap = config.avr_entities || {};
     this._userLeader = null; // manual pick on the card, session-scoped
     this._builtLeader = null;
     this._built = false;
     this._errorShown = false;
     this._showSources = false;
     this._showLeaders = false;
+    this._showModes = false;
     this._dragging = {};
     this._pendingJoin = {};
     this._renderKey = '';
@@ -189,6 +194,11 @@ class HeosMultiroomCard extends HTMLElement {
       parts.push(
         `${id}:${s.state}:${a.source || ''}:${a.volume_level ?? ''}:${a.is_volume_muted ? 'm' : ''}:${(a.group_members || []).join(',')}`
       );
+    });
+    Object.values(this._avrMap).forEach((avr) => {
+      const s = this._hass.states[avr];
+      const a = (s && s.attributes) || {};
+      parts.push(`${avr}:${s ? s.state : 'missing'}:${a.sound_mode || ''}`);
     });
     return parts.join('|');
   }
@@ -370,6 +380,7 @@ class HeosMultiroomCard extends HTMLElement {
     const title = this._config.name || 'Multi-room Audio';
     const rooms = this._rooms(leader);
     const multiLeader = this._players.length > 1;
+    const avr = this._avrMap[leader];
 
     const roomRows = rooms
       .map(
@@ -416,8 +427,8 @@ class HeosMultiroomCard extends HTMLElement {
         <style>
           .acard { padding: 16px; }
           .title { font-size: 20px; font-weight: 500; color: var(--primary-text-color); }
-          .ctrl-row { display: flex; gap: 10px; margin-top: 12px; }
-          .ctrl-wrap { position: relative; flex: 1; min-width: 0; }
+          .ctrl-row { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+          .ctrl-wrap { position: relative; flex: 1 1 44%; min-width: 0; }
           .src-btn { width: 100%; border: none; border-radius: 12px; background: var(--secondary-background-color, #f2f2f2);
             padding: 8px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px;
             color: var(--primary-text-color); font-family: inherit; }
@@ -475,6 +486,15 @@ class HeosMultiroomCard extends HTMLElement {
               </button>
               <div data-ref="leader-menu"></div>
             </div>
+            ${avr ? `
+            <div class="ctrl-wrap">
+              <button class="src-btn" data-ref="sm-btn">
+                <ha-icon icon="mdi:surround-sound"></ha-icon>
+                <span><span class="src-label">Sound mode</span><span class="src-sub" data-ref="sm-sub">—</span></span>
+                <ha-icon icon="mdi:chevron-down"></ha-icon>
+              </button>
+              <div data-ref="sm-menu"></div>
+            </div>` : ''}
           </div>
           <div class="room-row leader-row">
             <div class="room-main">
@@ -485,6 +505,10 @@ class HeosMultiroomCard extends HTMLElement {
                 <span class="vol-pct" data-ref="leader-pct"></span>
               </div>
             </div>
+            ${avr ? `
+            <button class="icon-btn" data-ref="power-btn" title="Receiver power">
+              <ha-icon icon="mdi:power"></ha-icon>
+            </button>` : ''}
             <button class="icon-btn" data-ref="mute-leader" title="Mute / unmute (stream to rooms keeps playing)">
               <ha-icon data-ref="muteicon-leader" icon="mdi:volume-high"></ha-icon>
             </button>
@@ -499,33 +523,62 @@ class HeosMultiroomCard extends HTMLElement {
       this._els[el.getAttribute('data-ref')] = el;
     });
 
+    const closeAllMenus = () => {
+      this._showSources = false;
+      this._showLeaders = false;
+      this._showModes = false;
+    };
+    const renderAllMenus = () => {
+      this._renderSourceMenu(leader);
+      this._renderLeaderMenu(leader);
+      this._renderModeMenu(leader);
+    };
+
     // Source dropdown
     this._els['src-btn'].addEventListener('click', (e) => {
       e.stopPropagation();
-      this._showSources = !this._showSources;
-      this._showLeaders = false;
-      this._renderSourceMenu(leader);
-      this._renderLeaderMenu(leader);
+      const open = !this._showSources;
+      closeAllMenus();
+      this._showSources = open;
+      renderAllMenus();
     });
 
     // Leader dropdown
     if (multiLeader) {
       this._els['leader-btn'].addEventListener('click', (e) => {
         e.stopPropagation();
-        this._showLeaders = !this._showLeaders;
-        this._showSources = false;
-        this._renderLeaderMenu(leader);
-        this._renderSourceMenu(leader);
+        const open = !this._showLeaders;
+        closeAllMenus();
+        this._showLeaders = open;
+        renderAllMenus();
+      });
+    }
+
+    // Sound-mode dropdown + receiver power (only when a receiver entity
+    // is linked to the current leader via avr_entities)
+    if (avr) {
+      this._els['sm-btn'].addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = !this._showModes;
+        closeAllMenus();
+        this._showModes = open;
+        renderAllMenus();
+      });
+      this._els['power-btn'].addEventListener('click', () => {
+        const s = this._hass.states[avr];
+        const off = !s || s.state === 'off';
+        this._callService('media_player', off ? 'turn_on' : 'turn_off', { entity_id: avr });
       });
     }
 
     if (this._outside) document.removeEventListener('click', this._outside, true);
     this._outside = (e) => {
-      if ((this._showSources || this._showLeaders) && !e.composedPath().includes(this)) {
-        this._showSources = false;
-        this._showLeaders = false;
-        this._renderSourceMenu(leader);
-        this._renderLeaderMenu(leader);
+      if (
+        (this._showSources || this._showLeaders || this._showModes) &&
+        !e.composedPath().includes(this)
+      ) {
+        closeAllMenus();
+        renderAllMenus();
       }
     };
     document.addEventListener('click', this._outside, true);
@@ -589,6 +642,20 @@ class HeosMultiroomCard extends HTMLElement {
     this._setText(this._els['leader-name'], this._displayName(leader));
     this._patchSlider('leader-vol', 'leader-pct', leader, attrs.volume_level);
     this._patchMute('mute-leader', 'muteicon-leader', attrs.is_volume_muted);
+
+    // Receiver companion (power + sound mode)
+    const avr = this._avrMap[leader];
+    if (avr) {
+      const as = this._hass.states[avr];
+      const aa = (as && as.attributes) || {};
+      const isOn = as && as.state !== 'off' && as.state !== 'unavailable';
+      this._setText(this._els['sm-sub'], isOn ? aa.sound_mode || '—' : 'Off');
+      const pbtn = this._els['power-btn'];
+      if (pbtn) pbtn.classList.toggle('active', !!isOn);
+      const smBtn = this._els['sm-btn'];
+      if (smBtn) smBtn.disabled = !isOn;
+      if (this._showModes) this._renderModeMenu(leader);
+    }
 
     rooms.forEach((room, i) => {
       const row = this.querySelector(`.room-row[data-room="${CSS.escape(room)}"]`);
@@ -659,6 +726,38 @@ class HeosMultiroomCard extends HTMLElement {
         });
         this._showSources = false;
         this._renderSourceMenu(leader);
+      });
+    });
+  }
+
+  _renderModeMenu(leader) {
+    const container = this._els['sm-menu'];
+    if (!container) return;
+    if (!this._showModes) {
+      if (container.innerHTML !== '') container.innerHTML = '';
+      return;
+    }
+    const avr = this._avrMap[leader];
+    const as = this._hass.states[avr];
+    const aa = (as && as.attributes) || {};
+    const current = aa.sound_mode;
+    const modes = aa.sound_mode_list || [];
+    container.innerHTML = `<div class="dropdown-menu">
+      ${modes
+        .map(
+          (m) =>
+            `<div class="dropdown-item ${m === current ? 'selected' : ''}" data-m="${m.replace(/"/g, '&quot;')}">${m}</div>`
+        )
+        .join('')}
+    </div>`;
+    container.querySelectorAll('.dropdown-item').forEach((el) => {
+      el.addEventListener('click', () => {
+        this._callService('media_player', 'select_sound_mode', {
+          entity_id: avr,
+          sound_mode: el.getAttribute('data-m'),
+        });
+        this._showModes = false;
+        this._renderModeMenu(leader);
       });
     });
   }
@@ -883,11 +982,15 @@ class HeosMultiroomCardEditor extends HTMLElement {
     if (v.name) config.name = v.name;
     if (v.join_script) config.join_script = v.join_script;
     const srcMap = {};
+    const avrMap = {};
     (config.players || []).forEach((p, i) => {
       const list = v[`src_${i}`];
       if (Array.isArray(list) && list.length) srcMap[p] = list;
+      const a = v[`avr_${i}`];
+      if (a) avrMap[p] = a;
     });
     if (Object.keys(srcMap).length) config.sources = srcMap;
+    if (Object.keys(avrMap).length) config.avr_entities = avrMap;
     if (this._config && (this._config.names || this._config.room_names))
       config.names = this._config.names || this._config.room_names;
     if (v.mode === 'theme') {
@@ -1076,6 +1179,11 @@ class HeosMultiroomCardEditor extends HTMLElement {
           },
         });
       }
+      schema.push({
+        name: `avr_${i}`,
+        label: `Receiver entity for ${friendly(p)} (optional — adds power + sound modes)`,
+        selector: { entity: { domain: 'media_player' } },
+      });
     });
     schema.push({
       name: 'mode',
@@ -1114,6 +1222,8 @@ class HeosMultiroomCardEditor extends HTMLElement {
       if (cfgS && typeof cfgS === 'object' && !Array.isArray(cfgS)) pre = cfgS[p] || [];
       else if (Array.isArray(cfgS)) pre = cfgS;
       data[`src_${i}`] = (current && current[`src_${i}`]) || pre;
+      data[`avr_${i}`] =
+        (current && current[`avr_${i}`]) || (this._config.avr_entities || {})[p] || '';
     });
     this._form.data = data;
   }
@@ -1130,7 +1240,7 @@ window.customCards.push({
   preview: true,
   documentationURL: 'https://github.com/mycrouch/heos-multiroom-card',
   description:
-    'One-card HEOS multi-room audio: switchable group leader with source picker, per-room join toggles, per-device volume and mute (mute the leader locally while it streams to rooms), and one-click setup of a server-side join script for reliable analogue-source streaming.',
+    'One-card HEOS multi-room audio: switchable group leader with per-leader source lists, per-room join toggles, per-device volume and mute (mute the leader locally while it streams to rooms), optional receiver power + sound-mode controls via a linked AVR entity, and one-click setup of a server-side join script for reliable analogue-source streaming.',
 });
 
 console.info(
