@@ -4,10 +4,7 @@ One-card multi-room audio control for Home Assistant, built for a HEOS group lea
 
 Born of a real frustration: the HEOS app regularly forms a group from an analogue source but the follower never starts streaming, needing a remove/re-add and a manual play. This card pairs with a small Home Assistant script that automates that dance, so adding a room *just works*.
 
-<p>
-  <img src="images/heos-multiroom-card.png" width="390" alt="HEOS Multiroom Card mid vinyl session">
-  <img src="images/dashboard-context.png" width="306" alt="The card in a dashboard section">
-</p>
+<img src="images/heos-multiroom-card.png" width="390" alt="HEOS Multiroom Card mid vinyl session">
 
 *Mid-vinyl-session: the AVR leads on Turntable and is muted locally (red) while the Denon 250 plays the stream in the dining room — receiver power and sound mode one tap away.*
 
