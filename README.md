@@ -4,9 +4,14 @@ One-card multi-room audio control for Home Assistant, built for a HEOS group lea
 
 Born of a real frustration: the HEOS app regularly forms a group from an analogue source but the follower never starts streaming, needing a remove/re-add and a manual play. This card pairs with a small Home Assistant script that automates that dance, so adding a room *just works*.
 
-<img src="images/dashboard-context.png" width="380" alt="The card in a dashboard section">
+<p>
+  <img src="images/heos-multiroom-card.png" width="390" alt="HEOS Multiroom Card mid vinyl session">
+  <img src="images/dashboard-context.png" width="306" alt="The card in a dashboard section">
+</p>
 
 *Mid-vinyl-session: the AVR leads on Turntable and is muted locally (red) while the Denon 250 plays the stream in the dining room — receiver power and sound mode one tap away.*
+
+
 
 ## Features
 
@@ -15,8 +20,8 @@ Born of a real frustration: the HEOS app regularly forms a group from an analogu
 - **Receiver companion controls** — link a player to its AVR entity (e.g. Denon receivers expose a second, richer entity via the denonavr integration) and the card gains a power button and a Sound mode dropdown (Stereo, Pure Direct, Movie…) whenever that player leads.
 - **One-click join-script setup** — the editor offers a button that creates the server-side companion script for you (admin users). No YAML, no docs detour.
 - **Per-room join toggles** — flip a room on and it joins the leader's group (via the join script for reliable analogue streaming, or plain `media_player.join`); flip it off to unjoin. Rows expand with controls only when a room is active.
-- **All-rooms volume** — one slider that sets every current group member, alongside individual sliders for the AMP and each room.
-- **Play/stop per room** — nudge a stubborn follower without opening the HEOS app.
+- **Per-device volume and mute** — every row (leader included) has its own slider and mute button; mute the leader locally while its source keeps streaming to the rooms.
+- **Play/stop per room** — nudge a stubborn follower without opening the HEOS app, with a highlighted button and "playing" tag while a room is live.
 - **GUI editor** — leader, rooms, source filter (populated live from the leader's `source_list`), join script, names, and styling all configurable without YAML.
 - **Three style modes** — default (native theme), apply any installed theme to just this card (with gradient swatch picker), or manual gradient colours.
 

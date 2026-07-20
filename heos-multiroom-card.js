@@ -1,5 +1,5 @@
 /*
- * HEOS Multiroom Card v1.5.1
+ * HEOS Multiroom Card v1.5.2
  * https://github.com/mycrouch/heos-multiroom-card
  *
  * One-card multi-room audio for HEOS: pick a group leader from your pool of
@@ -13,7 +13,7 @@
  * MIT License — Jason Crouch. Icons: Material Design Icons via ha-icon.
  */
 
-const HEOS_CARD_VERSION = '1.5.1';
+const HEOS_CARD_VERSION = '1.5.2';
 const HEOS_JOIN_SCRIPT_ID = 'heos_join_room';
 
 // Server-side companion script created by the editor's one-click setup.
@@ -398,11 +398,11 @@ class HeosMultiroomCard extends HTMLElement {
               <span class="vol-pct" data-ref="pct-${i}"></span>
             </div>
           </div>
-          <button class="icon-btn" data-ref="mute-${i}" title="Mute / unmute">
-            <ha-icon data-ref="muteicon-${i}" icon="mdi:volume-high"></ha-icon>
-          </button>
           <button class="icon-btn room-play" data-ref="play-${i}" title="Play / stop">
             <ha-icon data-ref="playicon-${i}" icon="mdi:play"></ha-icon>
+          </button>
+          <button class="icon-btn" data-ref="mute-${i}" title="Mute / unmute">
+            <ha-icon data-ref="muteicon-${i}" icon="mdi:volume-high"></ha-icon>
           </button>
         </div>`
       )
