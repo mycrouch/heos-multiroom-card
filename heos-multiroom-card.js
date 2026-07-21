@@ -1,5 +1,5 @@
 /*
- * HEOS Multiroom Card v1.5.2
+ * HEOS Multiroom Card v1.6.0
  * https://github.com/mycrouch/heos-multiroom-card
  *
  * One-card multi-room audio for HEOS: pick a group leader from your pool of
@@ -13,7 +13,7 @@
  * MIT License — Jason Crouch. Icons: Material Design Icons via ha-icon.
  */
 
-const HEOS_CARD_VERSION = '1.5.2';
+const HEOS_CARD_VERSION = '1.6.0';
 const HEOS_JOIN_SCRIPT_ID = 'heos_join_room';
 
 // Server-side companion script created by the editor's one-click setup.
@@ -41,7 +41,10 @@ const HEOS_JOIN_SCRIPT_CONFIG = {
     {
       action: 'media_player.join',
       target: { entity_id: '{{ leader }}' },
-      data: { group_members: ['{{ room }}'] },
+      data: {
+        group_members:
+          "{{ ((state_attr(leader, 'group_members') or []) | reject('eq', leader) | reject('eq', room) | list) + [room] }}",
+      },
     },
     {
       wait_template: "{{ is_state(room, 'playing') }}",
@@ -77,7 +80,10 @@ const HEOS_JOIN_SCRIPT_CONFIG = {
         {
           action: 'media_player.join',
           target: { entity_id: '{{ leader }}' },
-          data: { group_members: ['{{ room }}'] },
+          data: {
+        group_members:
+          "{{ ((state_attr(leader, 'group_members') or []) | reject('eq', leader) | reject('eq', room) | list) + [room] }}",
+      },
         },
         { delay: { seconds: 2 } },
         { action: 'media_player.media_play', target: { entity_id: '{{ room }}' } },
@@ -273,9 +279,13 @@ class HeosMultiroomCard extends HTMLElement {
       const name = script.replace(/^script\./, '');
       this._callService('script', name, { leader, room });
     } else {
+      // HEOS treats group_members as the ENTIRE group definition, not an
+      // addition — omitting current members boots them. Always pass the
+      // existing members plus the newcomer.
+      const keep = this._groupMembers(leader).filter((e) => e !== leader && e !== room);
       this._callService('media_player', 'join', {
         entity_id: leader,
-        group_members: [room],
+        group_members: [...keep, room],
       });
     }
   }
